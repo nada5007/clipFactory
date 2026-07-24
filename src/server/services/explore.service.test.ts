@@ -1,7 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { listChannels, listVideos, searchVideos } from "@/lib/clients/youtube";
-import { analyzeKeywordMarketability, getNichePopularVideos } from "@/server/services/explore.service";
+import { generateRelatedKeywords } from "@/lib/clients/anthropic";
+import { listChannels, listPopularVideos, listVideos, searchVideos } from "@/lib/clients/youtube";
+import { prisma } from "@/lib/prisma";
+import {
+  analyzeKeywordMarketability,
+  analyzeKeywordsBulk,
+  browseVideos,
+  getNichePopularVideos,
+  suggestRelatedKeywords,
+} from "@/server/services/explore.service";
+
+vi.mock("@/lib/clients/anthropic", () => ({ generateRelatedKeywords: vi.fn() }));
 
 vi.mock("@/lib/clients/youtube", async () => {
   const actual = await vi.importActual<typeof import("@/lib/clients/youtube")>("@/lib/clients/youtube");
@@ -10,7 +20,38 @@ vi.mock("@/lib/clients/youtube", async () => {
     searchVideos: vi.fn(),
     listVideos: vi.fn(),
     listChannels: vi.fn(),
+    listPopularVideos: vi.fn(),
   };
+});
+
+function searchItem(videoId: string) {
+  return {
+    id: { videoId },
+    snippet: { title: "t", channelId: "c1", channelTitle: "ch", publishedAt: "2026-01-01T00:00:00Z", thumbnails: {} },
+  };
+}
+
+function video(overrides: Partial<Awaited<ReturnType<typeof listVideos>>["items"][number]> = {}) {
+  return {
+    id: "v1",
+    snippet: {
+      title: "한국어 제목 영상",
+      channelId: "c1",
+      channelTitle: "채널",
+      publishedAt: new Date().toISOString(),
+    },
+    statistics: { viewCount: "10000", likeCount: "100" },
+    contentDetails: { duration: "PT1M" },
+    ...overrides,
+  } as Awaited<ReturnType<typeof listVideos>>["items"][number];
+}
+
+beforeEach(() => {
+  vi.mocked(generateRelatedKeywords).mockResolvedValue([]);
+});
+
+afterEach(async () => {
+  await prisma.apiCache.deleteMany({ where: { cacheKey: { startsWith: "explore-browse:" } } });
 });
 
 describe("analyzeKeywordMarketability", () => {
@@ -87,5 +128,153 @@ describe("getNichePopularVideos", () => {
 
     expect(searchVideos).toHaveBeenCalledWith(expect.objectContaining({ q: "부동산", regionCode: "KR" }));
     expect(result).toHaveLength(1);
+  });
+});
+
+describe("browseVideos", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(generateRelatedKeywords).mockResolvedValue([]);
+  });
+
+  it("기간 24h + 쿼리·니치 없음이면 공식 인기 차트(listPopularVideos)를 사용한다", async () => {
+    vi.mocked(listPopularVideos).mockResolvedValue({ items: [video()] });
+
+    const result = await browseVideos({ regionCode: "KR", period: "24h", krOnly: false });
+
+    expect(result.usedChart).toBe(true);
+    expect(listPopularVideos).toHaveBeenCalled();
+    expect(searchVideos).not.toHaveBeenCalled();
+    expect(result.videos).toHaveLength(1);
+  });
+
+  it("기간이 24h가 아니면 search.list 기반으로 전환한다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("v1")] });
+    vi.mocked(listVideos).mockResolvedValue({ items: [video()] });
+
+    const result = await browseVideos({ regionCode: "KR", period: "7d", krOnly: false });
+
+    expect(result.usedChart).toBe(false);
+    expect(searchVideos).toHaveBeenCalled();
+    expect(listPopularVideos).not.toHaveBeenCalled();
+  });
+
+  it("검색어가 있으면 24h여도 search.list 경로를 사용한다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("v1")] });
+    vi.mocked(listVideos).mockResolvedValue({ items: [video()] });
+
+    const result = await browseVideos({ regionCode: "KR", period: "24h", query: "다이어트", krOnly: false });
+
+    expect(result.usedChart).toBe(false);
+    expect(listPopularVideos).not.toHaveBeenCalled();
+  });
+
+  it("krOnly가 true면 한글 비중이 낮은 제목/채널명은 제외한다", async () => {
+    vi.mocked(listPopularVideos).mockResolvedValue({
+      items: [
+        video({ id: "kr1", snippet: { title: "한국어 영상 제목", channelId: "c1", channelTitle: "한국채널", publishedAt: new Date().toISOString() } }),
+        video({ id: "en1", snippet: { title: "English Only Title Here", channelId: "c2", channelTitle: "English Channel", publishedAt: new Date().toISOString() } }),
+      ],
+    });
+
+    const result = await browseVideos({ period: "24h", krOnly: true });
+
+    expect(result.videos.map((v) => v.id)).toEqual(["kr1"]);
+  });
+
+  it("videoForm=short이면 180초 초과 영상을 제외한다", async () => {
+    vi.mocked(listPopularVideos).mockResolvedValue({
+      items: [
+        video({ id: "short1", contentDetails: { duration: "PT30S" } }),
+        video({ id: "long1", contentDetails: { duration: "PT10M" } }),
+      ],
+    });
+
+    const result = await browseVideos({ period: "24h", krOnly: false, videoForm: "short" });
+
+    expect(result.videos.map((v) => v.id)).toEqual(["short1"]);
+  });
+
+  it("minViewFilter를 만족하지 못하는 영상은 제외한다", async () => {
+    vi.mocked(listPopularVideos).mockResolvedValue({
+      items: [
+        video({ id: "big", statistics: { viewCount: "500000" } }),
+        video({ id: "small", statistics: { viewCount: "100" } }),
+      ],
+    });
+
+    const result = await browseVideos({ period: "24h", krOnly: false, minViewFilter: "10000" });
+
+    expect(result.videos.map((v) => v.id)).toEqual(["big"]);
+  });
+
+  it("channelUniqueOnly면 채널당 조회수가 가장 높은 영상 1개만 남긴다", async () => {
+    vi.mocked(listPopularVideos).mockResolvedValue({
+      items: [
+        video({ id: "c1-low", snippet: { title: "한국어 제목1", channelId: "same", channelTitle: "채널", publishedAt: new Date().toISOString() }, statistics: { viewCount: "1000" } }),
+        video({ id: "c1-high", snippet: { title: "한국어 제목2", channelId: "same", channelTitle: "채널", publishedAt: new Date().toISOString() }, statistics: { viewCount: "9000" } }),
+      ],
+    });
+
+    const result = await browseVideos({ period: "24h", krOnly: false, channelUniqueOnly: true });
+
+    expect(result.videos).toHaveLength(1);
+    expect(result.videos[0].id).toBe("c1-high");
+  });
+
+  it("니치 칩을 지정하면 니치 키워드로 병렬 검색하고 제목 매칭 필터를 적용한다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("v1"), searchItem("v2")] });
+    vi.mocked(listVideos).mockResolvedValue({
+      items: [
+        video({ id: "v1", snippet: { title: "부동산 청약 꿀팁", channelId: "c1", channelTitle: "채널", publishedAt: new Date().toISOString() } }),
+        video({ id: "v2", snippet: { title: "전혀 관련없는 브이로그", channelId: "c2", channelTitle: "채널2", publishedAt: new Date().toISOString() } }),
+      ],
+    });
+
+    const result = await browseVideos({ period: "24h", krOnly: false, niche: "부동산" });
+
+    expect(searchVideos).toHaveBeenCalled();
+    expect(result.videos.map((v) => v.id)).toEqual(["v1"]);
+  });
+
+  it("성능 등급별 건수(tierCounts)와 핵심 토픽(topTopics)을 함께 반환한다", async () => {
+    vi.mocked(listPopularVideos).mockResolvedValue({ items: [video()] });
+
+    const result = await browseVideos({ period: "24h", krOnly: false });
+
+    expect(result.tierCounts).toBeDefined();
+    expect(Object.keys(result.tierCounts)).toEqual(
+      expect.arrayContaining(["explosive", "rising", "steady_growth", "evergreen", "stagnant"]),
+    );
+    expect(Array.isArray(result.topTopics)).toBe(true);
+  });
+});
+
+describe("analyzeKeywordsBulk", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(generateRelatedKeywords).mockResolvedValue([]);
+  });
+
+  it("최대 10개까지만 분석하고 videos 필드는 포함하지 않는다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [] });
+
+    const keywords = Array.from({ length: 15 }, (_, i) => `키워드${i}`);
+    const results = await analyzeKeywordsBulk(keywords);
+
+    expect(results).toHaveLength(10);
+    expect(results[0]).not.toHaveProperty("videos");
+    expect(results[0].keyword).toBe("키워드0");
+  });
+});
+
+describe("suggestRelatedKeywords", () => {
+  it("Anthropic 클라이언트의 연관 키워드 생성 함수를 그대로 호출한다", async () => {
+    vi.mocked(generateRelatedKeywords).mockResolvedValue(["다이어트 식단", "다이어트 운동", "다이어트 간헐적단식"]);
+
+    const result = await suggestRelatedKeywords("다이어트");
+
+    expect(generateRelatedKeywords).toHaveBeenCalledWith("다이어트", 3);
+    expect(result).toEqual(["다이어트 식단", "다이어트 운동", "다이어트 간헐적단식"]);
   });
 });

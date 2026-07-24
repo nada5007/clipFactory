@@ -79,16 +79,26 @@ export async function generateScript(
   return { script: response.parsed_output, model: MODEL };
 }
 
-// PROJECT_SPEC.md §2.3 "영상 분석 모달 (2.10)" / UI_SPEC.md §7.1 "댓글 감정 분석": 댓글 상위 100개 → 긍/중/부정 비율 + 클러스터.
+// PROJECT_SPEC.md §2.3 "영상 분석 모달 (2.10) — 댓글/SEO/종합분석 탭 고도화": 댓글 상위 100개를 각각
+// 감정(3분류)·의도(9분류)로 분류한다. 좋아요·작성자 등 실측 메타데이터는 AI가 아니라 YouTube API 원본을
+// video-seo.service.ts에서 그대로 사용하고, 여기서는 텍스트 기반 분류만 담당한다.
 const commentAnalysisSchema = z.object({
-  positiveRatio: z.number().min(0).max(1).describe("긍정 댓글 비율 (0~1)"),
-  neutralRatio: z.number().min(0).max(1).describe("중립 댓글 비율 (0~1)"),
-  negativeRatio: z.number().min(0).max(1).describe("부정 댓글 비율 (0~1)"),
-  keywordClusters: z.array(z.string()).describe("댓글에서 반복되는 대표 키워드·주제 클러스터 (최대 8개)"),
+  classifications: z
+    .array(
+      z.object({
+        index: z.number().int().describe("입력 댓글 목록의 0부터 시작하는 인덱스"),
+        sentiment: z.enum(["positive", "neutral", "negative"]).describe("감정 분류"),
+        intent: z
+          .enum(["공감", "놀람", "수요", "질문", "요청", "칭찬", "비판", "기타"])
+          .describe("댓글의 의도 분류 (하나만 선택)"),
+      }),
+    )
+    .describe("입력된 모든 댓글에 대한 분류 결과 (빠짐없이)"),
   frequentQuestions: z.array(z.string()).describe("댓글에서 자주 나오는 질문 클러스터, 후속 영상 주제 후보 (최대 5개)"),
   summary: z.string().describe("전체 댓글 반응을 요약하는 한국어 한 문단"),
 });
 
+export type CommentClassification = z.infer<typeof commentAnalysisSchema>["classifications"][number];
 export type CommentAnalysis = z.infer<typeof commentAnalysisSchema>;
 
 export async function analyzeComments(comments: string[]): Promise<CommentAnalysis> {
@@ -97,14 +107,16 @@ export async function analyzeComments(comments: string[]): Promise<CommentAnalys
 
   const response = await client.messages.parse({
     model: MODEL,
-    max_tokens: 4000,
+    max_tokens: 8000,
     thinking: { type: "adaptive" },
     output_config: { effort: "medium", format: zodOutputFormat(commentAnalysisSchema) },
     system:
-      "너는 YouTube 댓글 반응을 분석하는 어시스턴트다. 주어진 댓글 목록을 긍정/중립/부정으로 분류하고, " +
-      "반복되는 키워드와 자주 나오는 질문을 클러스터링해 한국어로 요약한다. 반어·풍자는 정확도가 낮을 수 있음을 감안해 보수적으로 분류한다.",
+      "너는 YouTube 댓글 반응을 분석하는 어시스턴트다. 주어진 댓글 목록의 각 댓글을 감정(positive/neutral/negative)과 " +
+      "의도(공감/놀람/수요/질문/요청/칭찬/비판/기타 중 하나) 두 축으로 분류한다. 반어·풍자는 정확도가 낮을 수 있음을 " +
+      "감안해 보수적으로 분류한다. 자주 나오는 질문을 클러스터링하고 전체 반응을 한국어로 요약한다. " +
+      "입력된 모든 인덱스에 대해 빠짐없이 분류 결과를 반환한다.",
     messages: [
-      { role: "user", content: `댓글 목록 (총 ${sample.length}개):\n${sample.map((c, i) => `${i + 1}. ${c}`).join("\n")}` },
+      { role: "user", content: `댓글 목록 (총 ${sample.length}개):\n${sample.map((c, i) => `${i}. ${c}`).join("\n")}` },
     ],
   });
 
@@ -246,6 +258,67 @@ export async function translateTitles(titles: string[]): Promise<string[]> {
 
   const byIndex = new Map(response.parsed_output.translations.map((t) => [t.index, t.translated]));
   return titles.map((title, i) => byIndex.get(i) ?? title);
+}
+
+// UI_SPEC.md §7.1 "탐색·분석" "자동 키워드 확장" / "추천 키워드": 입력 키워드의 연관 검색어를 생성한다.
+// 같은 함수가 두 곳에서 쓰인다: (1) browse/analyze 내부에서 결과 풀을 넓히기 위한 자동(무버튼) 확장,
+// (2) 분석 모드의 "추천 키워드" 버튼(사용자에게 다음 검색어를 명시적으로 제안).
+const relatedKeywordsSchema = z.object({
+  keywords: z.array(z.string()).describe("입력 키워드와 밀접하게 연관된 검색어 목록"),
+});
+
+export async function generateRelatedKeywords(keyword: string, count = 3): Promise<string[]> {
+  const client = getClient();
+
+  const response = await client.messages.parse({
+    model: MODEL,
+    max_tokens: 1000,
+    thinking: { type: "adaptive" },
+    output_config: { effort: "low", format: zodOutputFormat(relatedKeywordsSchema) },
+    system:
+      "너는 YouTube SEO 키워드 리서처다. 주어진 키워드와 같은 주제·의도를 공유하면서 " +
+      `약간씩 다른 앵글의 연관 검색어를 정확히 ${count}개 제안한다. 너무 넓히면 결과가 무의미해지므로 ` +
+      "원래 키워드의 핵심 주제를 벗어나지 않는 선에서 제안한다.",
+    messages: [{ role: "user", content: `키워드: ${keyword}` }],
+  });
+
+  if (!response.parsed_output) {
+    throw new Error("연관 키워드 생성 결과를 파싱하지 못했습니다.");
+  }
+
+  return response.parsed_output.keywords.slice(0, count);
+}
+
+// UI_SPEC.md §7.1 "영상 카드 공통 버튼 4종" "[대본 패턴]": 영상의 훅 구조·흐름을 분석해
+// 같은 주제를 내 스타일로 재해석한 새 대본을 생성한다. 산출 스키마는 기능 1의 스크립트 생성과 동일하게 재사용한다.
+export async function generateScriptPattern(input: {
+  title: string;
+  description: string;
+}): Promise<GeneratedScript> {
+  const client = getClient();
+
+  const response = await client.messages.parse({
+    model: MODEL,
+    max_tokens: 8000,
+    thinking: { type: "adaptive" },
+    output_config: { effort: "medium", format: zodOutputFormat(scriptOutputSchema) },
+    system:
+      "너는 한국어 YouTube 쇼츠 대본 작가다. 참고 영상의 제목·설명에서 훅 구조와 전개 흐름을 분석한 뒤, " +
+      "같은 주제를 내 채널 스타일로 재해석한 새 대본(제목/후킹멘트/본문/이미지 프롬프트)을 생성한다. " +
+      "원본 문장을 그대로 베끼지 않는다.",
+    messages: [
+      {
+        role: "user",
+        content: `참고 영상 제목: ${input.title}\n참고 영상 설명: ${input.description.slice(0, 1000)}`,
+      },
+    ],
+  });
+
+  if (!response.parsed_output) {
+    throw new Error("대본 패턴 생성 결과를 파싱하지 못했습니다.");
+  }
+
+  return response.parsed_output;
 }
 
 // UI_SPEC.md §7.1 "홈" "오늘의 AI 아이디어": 니치 기반(또는 직접 입력) 쇼츠 아이디어 5개 시드.

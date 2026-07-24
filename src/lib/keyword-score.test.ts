@@ -52,6 +52,37 @@ describe("computeKeywordMarketScore", () => {
     expect(result.score).toBeGreaterThanOrEqual(0);
   });
 
+  it("recommendScore는 searchVolumeScore * (1 - competitionRatio)의 반올림값이다", () => {
+    const videos = [
+      { viewCount: 200_000, likeCount: 8_000, publishedAt: daysAgo(10), channelId: "c1" },
+      { viewCount: 50_000, likeCount: 500, publishedAt: daysAgo(200), channelId: "c2" },
+    ];
+    const channels = [
+      { id: "c1", subscriberCount: 20_000 },
+      { id: "c2", subscriberCount: 300_000 },
+    ];
+
+    const result = computeKeywordMarketScore(videos, channels);
+    expect(result.recommendScore).toBe(Math.round(result.searchVolumeScore * (1 - result.competitionRatio)));
+  });
+
+  it("경쟁 채널 구독자가 적을수록(경쟁도 낮음) 같은 검색량에서 추천 점수가 더 높다", () => {
+    const videos = Array.from({ length: 5 }, (_, i) => ({
+      viewCount: 300_000,
+      likeCount: 10_000,
+      publishedAt: daysAgo(5),
+      channelId: `chan${i}`,
+    }));
+    const lowCompetitionChannels = videos.map((v) => ({ id: v.channelId, subscriberCount: 1_000 }));
+    const highCompetitionChannels = videos.map((v) => ({ id: v.channelId, subscriberCount: 5_000_000 }));
+
+    const lowCompetition = computeKeywordMarketScore(videos, lowCompetitionChannels);
+    const highCompetition = computeKeywordMarketScore(videos, highCompetitionChannels);
+
+    expect(lowCompetition.searchVolumeScore).toBe(highCompetition.searchVolumeScore);
+    expect(lowCompetition.recommendScore).toBeGreaterThan(highCompetition.recommendScore);
+  });
+
   it("breakdown 항목 합이 score와 일치한다", () => {
     const videos = [
       { viewCount: 200_000, likeCount: 8_000, publishedAt: daysAgo(10), channelId: "c1" },

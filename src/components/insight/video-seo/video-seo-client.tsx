@@ -140,7 +140,7 @@ export function VideoSeoClient() {
             <h3 className="mb-2 text-sm font-semibold">댓글 감정 분석</h3>
             {report.comments.error ? (
               <p className="text-sm text-muted-foreground">댓글을 분석하지 못했습니다: {report.comments.error}</p>
-            ) : !report.comments.analysis ? (
+            ) : !report.comments.insight ? (
               <p className="text-sm text-muted-foreground">분석할 댓글이 없습니다.</p>
             ) : (
               <div className="flex flex-col gap-3 rounded-lg border bg-card p-4">
@@ -149,30 +149,21 @@ export function VideoSeoClient() {
                   정확도는 낮을 수 있어요
                 </p>
                 <div className="flex h-3 overflow-hidden rounded-full">
-                  <div className="bg-emerald-500" style={{ width: percentFormat.format(report.comments.analysis.positiveRatio) }} />
-                  <div className="bg-muted-foreground/30" style={{ width: percentFormat.format(report.comments.analysis.neutralRatio) }} />
-                  <div className="bg-destructive" style={{ width: percentFormat.format(report.comments.analysis.negativeRatio) }} />
+                  <div className="bg-emerald-500" style={{ width: percentFormat.format(report.comments.insight.positiveRatio) }} />
+                  <div className="bg-muted-foreground/30" style={{ width: percentFormat.format(report.comments.insight.neutralRatio) }} />
+                  <div className="bg-destructive" style={{ width: percentFormat.format(report.comments.insight.negativeRatio) }} />
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  긍정 {percentFormat.format(report.comments.analysis.positiveRatio)} · 중립{" "}
-                  {percentFormat.format(report.comments.analysis.neutralRatio)} · 부정{" "}
-                  {percentFormat.format(report.comments.analysis.negativeRatio)}
+                  긍정 {percentFormat.format(report.comments.insight.positiveRatio)} · 중립{" "}
+                  {percentFormat.format(report.comments.insight.neutralRatio)} · 부정{" "}
+                  {percentFormat.format(report.comments.insight.negativeRatio)}
                 </p>
-                <p className="text-sm">{report.comments.analysis.summary}</p>
-                {report.comments.analysis.keywordClusters.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {report.comments.analysis.keywordClusters.map((k) => (
-                      <span key={k} className="rounded-full bg-muted px-2 py-0.5 text-xs">
-                        {k}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {report.comments.analysis.frequentQuestions.length > 0 && (
+                <p className="text-sm">{report.comments.summary}</p>
+                {report.comments.frequentQuestions.length > 0 && (
                   <div>
                     <p className="text-xs font-medium text-muted-foreground">자주 나오는 질문</p>
                     <ul className="text-sm text-muted-foreground">
-                      {report.comments.analysis.frequentQuestions.map((q) => (
+                      {report.comments.frequentQuestions.map((q) => (
                         <li key={q}>· {q}</li>
                       ))}
                     </ul>
@@ -184,15 +175,45 @@ export function VideoSeoClient() {
 
           {report.similarVideos.length > 0 && (
             <div>
-              <h3 className="mb-2 text-sm font-semibold">유사 영상</h3>
+              <h3 className="mb-2 text-sm font-semibold">유사 컨셉 영상 — &ldquo;{report.similarVideosSearchTerm}&rdquo;</h3>
               <div className="flex flex-col divide-y rounded-lg border">
                 {report.similarVideos.map((video) => (
-                  <div key={video.id.videoId} className="flex items-center justify-between gap-3 p-2 text-sm">
-                    <span className="line-clamp-1" title={video.snippet.title}>
-                      {video.snippet.title}
+                  <a
+                    key={video.id}
+                    href={`https://www.youtube.com/watch?v=${video.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center justify-between gap-3 p-2 text-sm hover:bg-muted"
+                  >
+                    <span className="line-clamp-1 text-primary hover:underline" title={video.title}>
+                      {video.title}
                     </span>
-                    <span className="shrink-0 text-xs text-muted-foreground">{video.snippet.channelTitle}</span>
-                  </div>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {video.channelTitle} · {numberFormat.format(video.viewCount)}회
+                    </span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {report.sameChannelVideos.length > 0 && (
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">같은 채널 인기 영상</h3>
+              <div className="flex flex-col divide-y rounded-lg border">
+                {report.sameChannelVideos.map((video) => (
+                  <a
+                    key={video.id}
+                    href={`https://www.youtube.com/watch?v=${video.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center justify-between gap-3 p-2 text-sm hover:bg-muted"
+                  >
+                    <span className="line-clamp-1 text-primary hover:underline" title={video.title}>
+                      {video.title}
+                    </span>
+                    <span className="shrink-0 text-xs text-muted-foreground">{numberFormat.format(video.viewCount)}회</span>
+                  </a>
                 ))}
               </div>
             </div>

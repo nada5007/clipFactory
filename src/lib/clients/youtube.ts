@@ -90,10 +90,13 @@ async function callYoutubeApi<T>(
 }
 
 export function searchVideos(params: {
-  q: string;
+  q?: string;
   regionCode?: string;
   relevanceLanguage?: string;
   videoDuration?: "short" | "medium" | "long";
+  videoCategoryId?: string;
+  channelId?: string;
+  order?: "relevance" | "viewCount" | "date" | "rating";
   maxResults?: number;
   publishedAfter?: string;
   publishedBefore?: string;
@@ -103,10 +106,13 @@ export function searchVideos(params: {
     {
       part: "snippet",
       type: "video",
-      q: params.q,
+      ...(params.q ? { q: params.q } : {}),
       ...(params.regionCode ? { regionCode: params.regionCode } : {}),
       ...(params.relevanceLanguage ? { relevanceLanguage: params.relevanceLanguage } : {}),
       ...(params.videoDuration ? { videoDuration: params.videoDuration } : {}),
+      ...(params.videoCategoryId ? { videoCategoryId: params.videoCategoryId } : {}),
+      ...(params.channelId ? { channelId: params.channelId } : {}),
+      ...(params.order ? { order: params.order } : {}),
       ...(params.maxResults ? { maxResults: String(params.maxResults) } : {}),
       ...(params.publishedAfter ? { publishedAfter: params.publishedAfter } : {}),
       ...(params.publishedBefore ? { publishedBefore: params.publishedBefore } : {}),
@@ -191,6 +197,7 @@ export type YoutubeVideoDetail = {
     channelId: string;
     channelTitle: string;
     publishedAt: string;
+    categoryId?: string;
     tags?: string[];
     thumbnails?: { medium?: { url: string }; maxres?: { url: string } };
   };
@@ -213,6 +220,7 @@ export type YoutubeCommentThread = {
     topLevelComment: {
       snippet: { textDisplay: string; likeCount: number; authorDisplayName: string };
     };
+    totalReplyCount?: number;
   };
 };
 export type YoutubeCommentThreadsResponse = { items: YoutubeCommentThread[] };

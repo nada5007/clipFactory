@@ -1,4 +1,4 @@
-import { generateVideoIdeas, type GeneratedVideoIdeas } from "@/lib/clients/anthropic";
+import { generateScriptPattern, generateVideoIdeas, type GeneratedScript, type GeneratedVideoIdeas } from "@/lib/clients/anthropic";
 import { getChannel } from "@/lib/clients/youtube";
 import { analyzeVideoSeo, type VideoSeoReport } from "@/server/services/video-seo.service";
 
@@ -44,4 +44,9 @@ export function generateIdeasForVideo(input: {
   commentSummary?: string;
 }): Promise<GeneratedVideoIdeas> {
   return generateVideoIdeas(input);
+}
+
+// UI_SPEC.md §7.1 "영상 카드 공통 버튼 4종" "[대본 패턴]": lazy 실행(버튼 클릭 시에만 Anthropic API 호출).
+export function generateScriptPatternForVideo(input: { title: string; description: string }): Promise<GeneratedScript> {
+  return generateScriptPattern(input);
 }
