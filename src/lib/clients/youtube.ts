@@ -45,6 +45,7 @@ export type YoutubeVideo = {
     thumbnails?: { medium?: { url: string } };
   };
   statistics: { viewCount?: string; likeCount?: string; commentCount?: string };
+  contentDetails?: { duration: string };
 };
 
 export type YoutubeVideosResponse = { items: YoutubeVideo[] };
@@ -91,8 +92,11 @@ async function callYoutubeApi<T>(
 export function searchVideos(params: {
   q: string;
   regionCode?: string;
+  relevanceLanguage?: string;
+  videoDuration?: "short" | "medium" | "long";
   maxResults?: number;
   publishedAfter?: string;
+  publishedBefore?: string;
 }) {
   return callYoutubeApi<YoutubeSearchResponse>(
     "search",
@@ -101,8 +105,11 @@ export function searchVideos(params: {
       type: "video",
       q: params.q,
       ...(params.regionCode ? { regionCode: params.regionCode } : {}),
+      ...(params.relevanceLanguage ? { relevanceLanguage: params.relevanceLanguage } : {}),
+      ...(params.videoDuration ? { videoDuration: params.videoDuration } : {}),
       ...(params.maxResults ? { maxResults: String(params.maxResults) } : {}),
       ...(params.publishedAfter ? { publishedAfter: params.publishedAfter } : {}),
+      ...(params.publishedBefore ? { publishedBefore: params.publishedBefore } : {}),
     },
     SEARCH_TTL_SECONDS,
   );
@@ -111,7 +118,7 @@ export function searchVideos(params: {
 export function listVideos(videoIds: string[]) {
   return callYoutubeApi<YoutubeVideosResponse>(
     "videos",
-    { part: "snippet,statistics", id: videoIds.join(",") },
+    { part: "snippet,statistics,contentDetails", id: videoIds.join(",") },
     VIDEOS_TTL_SECONDS,
   );
 }

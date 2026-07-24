@@ -6,19 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import type { GeneratedVideoIdeas } from "@/lib/clients/anthropic";
+import { formatDurationLabel } from "@/lib/duration";
 import { cn } from "@/lib/utils";
 import type { VideoAnalysisDetail } from "@/server/services/video-analysis.service";
 
 const numberFormat = new Intl.NumberFormat("ko-KR");
 const percentFormat = new Intl.NumberFormat("ko-KR", { style: "percent", maximumFractionDigits: 0 });
-
-function formatDuration(iso: string): string {
-  const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-  if (!match) return iso;
-  const [, h, m, s] = match;
-  const seconds = (s ?? "0").padStart(2, "0");
-  return h ? `${h}:${(m ?? "0").padStart(2, "0")}:${seconds}` : `${m ?? "0"}:${seconds}`;
-}
 
 const TABS = [
   { key: "overview", label: "개요" },
@@ -147,7 +140,7 @@ export function VideoDetailModal({
               <div className="flex flex-col gap-2 text-sm">
                 <p className="text-muted-foreground">{detail.video.channelTitle}</p>
                 <p className="whitespace-pre-wrap">{detail.video.description.slice(0, 500)}</p>
-                <p className="text-xs text-muted-foreground">길이 {formatDuration(detail.video.duration)}</p>
+                <p className="text-xs text-muted-foreground">길이 {formatDurationLabel(detail.video.duration)}</p>
               </div>
             )}
 

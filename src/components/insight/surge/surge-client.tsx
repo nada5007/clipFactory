@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,6 +31,7 @@ const PERIODS = [
 ];
 
 export function SurgeClient() {
+  const searchParams = useSearchParams();
   const [keyword, setKeyword] = useState("");
   const [threshold, setThreshold] = useState("5");
   const [days, setDays] = useState("30");
@@ -58,8 +60,8 @@ export function SurgeClient() {
     });
   };
 
-  const runSearch = () => {
-    const trimmed = keyword.trim();
+  const runSearch = (explicitKeyword?: string) => {
+    const trimmed = (explicitKeyword ?? keyword).trim();
     if (!trimmed) {
       setError("키워드를 입력하세요.");
       return;
@@ -77,6 +79,16 @@ export function SurgeClient() {
       .catch((e) => setError(e instanceof Error ? e.message : "떡상 영상을 찾지 못했습니다."))
       .finally(() => setLoading(false));
   };
+
+  // UI_SPEC.md §7.1 "홈" "빠른 떡상 발굴": 니치 칩 클릭 시 ?keyword=로 넘어와 자동 검색된다.
+  useEffect(() => {
+    const presetKeyword = searchParams.get("keyword");
+    if (presetKeyword) {
+      setKeyword(presetKeyword);
+      runSearch(presetKeyword);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="flex flex-col gap-4">
@@ -120,7 +132,7 @@ export function SurgeClient() {
             ))}
           </SelectContent>
         </Select>
-        <Button onClick={runSearch} disabled={loading}>
+        <Button onClick={() => runSearch()} disabled={loading}>
           {loading ? "발굴 중..." : "영상 떡상 발굴"}
         </Button>
       </div>

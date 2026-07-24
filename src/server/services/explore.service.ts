@@ -5,6 +5,17 @@ export function getPopularVideos(regionCode?: string, categoryId?: string) {
   return listPopularVideos({ regionCode, categoryId });
 }
 
+const NICHE_VIDEO_COUNT = 5;
+
+// UI_SPEC.md §7.1 "홈" "니치 인기" 위젯: 내 니치 카테고리의 "지금 뜨는 영상" 미리보기.
+export async function getNichePopularVideos(niche: string) {
+  const result = await searchVideos({ q: niche, regionCode: "KR", maxResults: NICHE_VIDEO_COUNT });
+  if (result.items.length === 0) return [];
+
+  const videosResult = await listVideos(result.items.map((item) => item.id.videoId));
+  return videosResult.items;
+}
+
 const KEYWORD_SEARCH_SAMPLE_SIZE = 50;
 
 export type KeywordMarketAnalysis = KeywordScoreResult & { keyword: string; videos: YoutubeVideo[] };

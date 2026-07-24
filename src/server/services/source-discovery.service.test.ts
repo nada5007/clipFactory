@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { scoreSourceMatches } from "@/lib/clients/anthropic";
+import { scoreSourceMatches, translateTitles } from "@/lib/clients/anthropic";
 import { listVideos, searchVideos } from "@/lib/clients/youtube";
 import { prisma } from "@/lib/prisma";
 import { discoverSources } from "@/server/services/source-discovery.service";
 
-vi.mock("@/lib/clients/anthropic", () => ({ scoreSourceMatches: vi.fn() }));
+vi.mock("@/lib/clients/anthropic", () => ({ scoreSourceMatches: vi.fn(), translateTitles: vi.fn() }));
 
 vi.mock("@/lib/clients/youtube", async () => {
   const actual = await vi.importActual<typeof import("@/lib/clients/youtube")>("@/lib/clients/youtube");
@@ -59,5 +59,89 @@ describe("discoverSources", () => {
     );
     expect(result.videos.every((v) => v.id !== "v2")).toBe(true);
     expect(result.videos[0].matchScore).toBeGreaterThanOrEqual(result.videos[1]?.matchScore ?? 0);
+  });
+
+  it("다중 지역·언어를 선택하면 지역별·언어별로 각각 검색해 결과를 중복 제거 후 병합한다", async () => {
+    vi.mocked(searchVideos)
+      .mockResolvedValueOnce({ items: [searchItem("v1"), searchItem("v2")] }) // region US
+      .mockResolvedValueOnce({ items: [searchItem("v2"), searchItem("v3")] }) // region JP (v2 중복)
+      .mockResolvedValueOnce({ items: [searchItem("v4")] }); // language ja
+    vi.mocked(listVideos).mockResolvedValue({
+      items: ["v1", "v2", "v3", "v4"].map((id) => ({
+        id,
+        snippet: { title: id, channelTitle: "ch", channelId: "c", publishedAt: "2026-01-01T00:00:00Z" },
+        statistics: { viewCount: "100" },
+      })),
+    });
+    vi.mocked(scoreSourceMatches).mockResolvedValue([]);
+
+    const result = await discoverSources({
+      concept: `다중지역-${Date.now()}`,
+      regionCodes: ["US", "JP"],
+      languages: ["ja"],
+      excludeKorean: false,
+    });
+
+    expect(searchVideos).toHaveBeenCalledTimes(3);
+    expect(result.candidateCount).toBe(4);
+    expect(listVideos).toHaveBeenCalledWith(["v1", "v2", "v3", "v4"]);
+  });
+
+  it("minViewCount 미만인 영상은 제외한다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("v1"), searchItem("v2")] });
+    vi.mocked(listVideos).mockResolvedValue({
+      items: [
+        { id: "v1", snippet: { title: "v1", channelTitle: "ch", channelId: "c", publishedAt: "2026-01-01T00:00:00Z" }, statistics: { viewCount: "500" } },
+        { id: "v2", snippet: { title: "v2", channelTitle: "ch", channelId: "c", publishedAt: "2026-01-01T00:00:00Z" }, statistics: { viewCount: "50000" } },
+      ],
+    });
+    vi.mocked(scoreSourceMatches).mockResolvedValue([{ index: 0, score: 80, reason: "", matchedKeywords: [] }]);
+
+    const result = await discoverSources({
+      concept: `최소조회수-${Date.now()}`,
+      excludeKorean: false,
+      minViewCount: 10000,
+    });
+
+    expect(result.videos.map((v) => v.id)).toEqual(["v2"]);
+  });
+
+  it("translateTitles 옵션이 켜지면 번역된 제목을 함께 반환한다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("v1")] });
+    vi.mocked(listVideos).mockResolvedValue({
+      items: [{ id: "v1", snippet: { title: "Hello World", channelTitle: "ch", channelId: "c", publishedAt: "2026-01-01T00:00:00Z" }, statistics: { viewCount: "100" } }],
+    });
+    vi.mocked(scoreSourceMatches).mockResolvedValue([{ index: 0, score: 80, reason: "", matchedKeywords: [] }]);
+    vi.mocked(translateTitles).mockResolvedValue(["안녕 세계"]);
+
+    const result = await discoverSources({
+      concept: `번역테스트-${Date.now()}`,
+      excludeKorean: false,
+      translateTitles: true,
+    });
+
+    expect(result.videos[0].translatedTitle).toBe("안녕 세계");
+  });
+
+  it("정렬 옵션 VIEWS는 조회수 내림차순으로 정렬한다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("v1"), searchItem("v2")] });
+    vi.mocked(listVideos).mockResolvedValue({
+      items: [
+        { id: "v1", snippet: { title: "v1", channelTitle: "ch", channelId: "c", publishedAt: "2026-01-01T00:00:00Z" }, statistics: { viewCount: "1000" } },
+        { id: "v2", snippet: { title: "v2", channelTitle: "ch", channelId: "c", publishedAt: "2026-01-01T00:00:00Z" }, statistics: { viewCount: "9000" } },
+      ],
+    });
+    vi.mocked(scoreSourceMatches).mockResolvedValue([
+      { index: 0, score: 90, reason: "", matchedKeywords: [] },
+      { index: 1, score: 10, reason: "", matchedKeywords: [] },
+    ]);
+
+    const result = await discoverSources({
+      concept: `정렬테스트-${Date.now()}`,
+      excludeKorean: false,
+      sort: "VIEWS",
+    });
+
+    expect(result.videos.map((v) => v.id)).toEqual(["v2", "v1"]);
   });
 });

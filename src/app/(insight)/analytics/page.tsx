@@ -1,5 +1,5 @@
-import { InsightPlaceholder } from "@/components/insight/insight-placeholder";
+import { HomeClient } from "@/components/insight/home/home-client";
 
 export default function AnalyticsHomePage() {
-  return <InsightPlaceholder title="홈 — 오늘의 AI 아이디어" />;
+  return <HomeClient />;
 }

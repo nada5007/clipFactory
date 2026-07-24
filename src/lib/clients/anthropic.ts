@@ -217,3 +217,94 @@ export async function scoreSourceMatches(
 
   return response.parsed_output.matches;
 }
+
+// UI_SPEC.md §7.1 "소스 발굴" "제목 자동 번역": 해외 영상 제목을 한국어로 일괄 번역한다.
+const translationSchema = z.object({
+  translations: z.array(z.object({ index: z.number().int(), translated: z.string() })),
+});
+
+export async function translateTitles(titles: string[]): Promise<string[]> {
+  if (titles.length === 0) return [];
+
+  const client = getClient();
+  const response = await client.messages.parse({
+    model: MODEL,
+    max_tokens: 4000,
+    thinking: { type: "adaptive" },
+    output_config: { effort: "low", format: zodOutputFormat(translationSchema) },
+    system:
+      "너는 번역가다. 주어진 영상 제목 목록을 자연스러운 한국어로 번역한다. " +
+      "입력된 모든 인덱스에 대해 빠짐없이 번역 결과를 반환한다.",
+    messages: [
+      { role: "user", content: titles.map((t, i) => `${i}. ${t}`).join("\n") },
+    ],
+  });
+
+  if (!response.parsed_output) {
+    throw new Error("제목 번역 결과를 파싱하지 못했습니다.");
+  }
+
+  const byIndex = new Map(response.parsed_output.translations.map((t) => [t.index, t.translated]));
+  return titles.map((title, i) => byIndex.get(i) ?? title);
+}
+
+// UI_SPEC.md §7.1 "홈" "오늘의 AI 아이디어": 니치 기반(또는 직접 입력) 쇼츠 아이디어 5개 시드.
+const dailyIdeaSchema = z.object({
+  ideas: z
+    .array(
+      z.object({
+        title: z.string().describe("아이디어 제목 (밈체 허용)"),
+        recommendScore: z.number().min(0).max(100).describe("추천 점수 (강추 {점수})"),
+        whyGood: z.string().describe("왜 좋은가 — 트렌드 근거 한 문장"),
+        hook: z.string().describe("후킹 — 영상 시작 3초용 문구"),
+        differentiator: z.string().describe("차별화 포인트"),
+        keywords: z.array(z.string()).describe("관련 키워드 (최대 5개)"),
+      }),
+    )
+    .length(5),
+});
+
+export type DailyIdea = z.infer<typeof dailyIdeaSchema>["ideas"][number];
+
+export type GenerateDailyIdeasInput =
+  | { mode: "auto"; niches: string[]; trendTitles?: string[] }
+  | { mode: "manual"; topic: string; targetAudience?: string; category?: string };
+
+export async function generateDailyIdeas(input: GenerateDailyIdeasInput): Promise<DailyIdea[]> {
+  const client = getClient();
+
+  const context =
+    input.mode === "auto"
+      ? [
+          `니치(관심 카테고리): ${input.niches.length > 0 ? input.niches.join(", ") : "미설정 — 범용 인기 소재로 생성"}`,
+          input.trendTitles && input.trendTitles.length > 0
+            ? `최근 인기 영상 제목(트렌드 참고용): ${input.trendTitles.slice(0, 20).join(" / ")}`
+            : undefined,
+        ]
+          .filter((line): line is string => Boolean(line))
+          .join("\n")
+      : [
+          `토픽: ${input.topic}`,
+          input.targetAudience ? `타겟 청중: ${input.targetAudience}` : undefined,
+          input.category ? `카테고리: ${input.category}` : undefined,
+        ]
+          .filter((line): line is string => Boolean(line))
+          .join("\n");
+
+  const response = await client.messages.parse({
+    model: MODEL,
+    max_tokens: 8000,
+    thinking: { type: "adaptive" },
+    output_config: { effort: "medium", format: zodOutputFormat(dailyIdeaSchema) },
+    system:
+      "너는 한국어 YouTube 쇼츠 기획자다. 주어진 니치(또는 토픽)를 바탕으로 오늘 만들 만한 쇼츠 아이디어 5개를 제안한다. " +
+      "각 아이디어는 제목, 추천 점수(0~100), 왜 좋은지(트렌드 근거), 후킹(첫 3초 문구), 차별화 포인트, 키워드로 구성한다.",
+    messages: [{ role: "user", content: context }],
+  });
+
+  if (!response.parsed_output) {
+    throw new Error("아이디어 생성 결과를 파싱하지 못했습니다.");
+  }
+
+  return response.parsed_output.ideas;
+}

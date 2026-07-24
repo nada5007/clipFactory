@@ -249,3 +249,27 @@ model SavedItem {
 
   @@index([type])
 }
+
+// UI_SPEC.md §7.1 "홈" "니치 설정 카드": 사용자가 설정한 관심 니치 카테고리 (AI 아이디어 품질에 직접 영향).
+// 단일 사용자 앱이므로 사용자별 구분 없이 전역으로 관리한다.
+model NicheSetting {
+  id        String   @id @default(cuid())
+  category  String   @unique
+  createdAt DateTime @default(now())
+}
+
+// UI_SPEC.md §7.1 "홈" "오늘의 AI 아이디어": 하루 1묶음(5개 시드)을 캐싱해 재진입 시 그대로 보여준다.
+// date는 "YYYY-MM-DD" — 같은 날 같은 모드로 재생성하면 upsert로 덮어쓴다.
+// PROJECT_SPEC.md §2.3 "홈 (2.1)" 2026-07-24 수정: 자동/직접 입력 모드는 서로 독립적으로 저장되어야 하므로
+// date 단독이 아니라 (date, mode) 조합을 유니크 키로 사용한다.
+model DailyIdea {
+  id        String   @id @default(cuid())
+  date      String
+  mode      String // "auto" | "manual"
+  niches    Json
+  ideasJson Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([date, mode])
+}

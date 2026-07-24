@@ -13,28 +13,71 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+import {
+  ALL_REGION_CODES,
+  DATE_RANGE_OPTIONS,
+  LANGUAGE_OPTIONS,
+  LENGTH_OPTIONS,
+  MIN_VIEW_OPTIONS,
+  REGION_GROUPS,
+  SORT_OPTIONS,
+  type DateRangeFilter,
+  type LengthFilter,
+  type MinViewFilter,
+  type SortOption,
+} from "@/lib/source-discovery-options";
 import type { SourceDiscoveryResult } from "@/server/services/source-discovery.service";
 
 const numberFormat = new Intl.NumberFormat("ko-KR");
 
-const REGIONS = [
-  { value: "US", label: "미국" },
-  { value: "GB", label: "영국" },
-  { value: "JP", label: "일본" },
-  { value: "DE", label: "독일" },
-  { value: "BR", label: "브라질" },
-  { value: "IN", label: "인도" },
-];
+function Chip({
+  selected,
+  onClick,
+  children,
+}: {
+  selected: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+        selected ? "border-primary bg-primary/10 text-primary" : "border-input text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
 
 export function SourceDiscoveryClient() {
   const [concept, setConcept] = useState("");
-  const [region, setRegion] = useState("US");
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const [translateTitlesOn, setTranslateTitlesOn] = useState(false);
+  const [selectedRegions, setSelectedRegions] = useState<Set<string>>(new Set());
+  const [selectedLanguages, setSelectedLanguages] = useState<Set<string>>(new Set());
+  const [length, setLength] = useState<LengthFilter>("ALL");
+  const [dateRange, setDateRange] = useState<DateRangeFilter>("ALL");
+  const [minViewCount, setMinViewCount] = useState<MinViewFilter>(0);
+  const [sort, setSort] = useState<SortOption>("MATCH");
   const [excludeKorean, setExcludeKorean] = useState(true);
+
   const [result, setResult] = useState<SourceDiscoveryResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
   const [savedVideoIds, setSavedVideoIds] = useState<Set<string>>(new Set());
+
+  const toggleInSet = (set: Set<string>, setter: (next: Set<string>) => void, value: string) => {
+    const next = new Set(set);
+    if (next.has(value)) next.delete(value);
+    else next.add(value);
+    setter(next);
+  };
 
   const runSearch = () => {
     const trimmed = concept.trim();
@@ -45,7 +88,18 @@ export function SourceDiscoveryClient() {
     setLoading(true);
     setError(null);
 
-    const params = new URLSearchParams({ concept: trimmed, region, excludeKorean: String(excludeKorean) });
+    const params = new URLSearchParams({
+      concept: trimmed,
+      excludeKorean: String(excludeKorean),
+      length,
+      dateRange,
+      minViewCount: String(minViewCount),
+      sort,
+      translateTitles: String(translateTitlesOn),
+    });
+    if (selectedRegions.size > 0) params.set("regions", Array.from(selectedRegions).join(","));
+    if (selectedLanguages.size > 0) params.set("languages", Array.from(selectedLanguages).join(","));
+
     fetch(`/api/insight/source-discovery?${params.toString()}`)
       .then(async (res) => {
         const body = await res.json();
@@ -83,33 +137,152 @@ export function SourceDiscoveryClient() {
         </p>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Input
-          value={concept}
-          onChange={(e) => setConcept(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && runSearch()}
-          placeholder="예: 한국 진돗개 키우는 외국인"
-          className="max-w-sm"
-        />
-        <Select value={region} onValueChange={setRegion}>
-          <SelectTrigger className="w-32">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {REGIONS.map((r) => (
-              <SelectItem key={r.value} value={r.value}>
-                {r.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div className="flex flex-col gap-3 rounded-lg border bg-card p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            value={concept}
+            onChange={(e) => setConcept(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && runSearch()}
+            placeholder="채널 컨셉 입력 (예: 한국 진돗개 키우는 외국인)"
+            className="max-w-sm"
+          />
+          <Button type="button" variant="outline" onClick={() => setOptionsOpen((v) => !v)}>
+            옵션 {optionsOpen ? "▲" : "▼"}
+          </Button>
+          <Button onClick={runSearch} disabled={loading} className="ml-auto">
+            {loading ? "발굴 중..." : "발굴 시작"}
+          </Button>
+        </div>
+
         <label className="flex items-center gap-2 text-sm">
-          <Checkbox checked={excludeKorean} onCheckedChange={(v) => setExcludeKorean(Boolean(v))} />
-          한국 콘텐츠 제외
+          <Checkbox checked={translateTitlesOn} onCheckedChange={(v) => setTranslateTitlesOn(Boolean(v))} />
+          제목 자동 번역
         </label>
-        <Button onClick={runSearch} disabled={loading}>
-          {loading ? "발굴 중..." : "발굴 시작"}
-        </Button>
+
+        {optionsOpen && (
+          <div className="flex flex-col gap-4 border-t pt-3">
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm font-medium">지역 (다중 선택)</span>
+                <div className="flex gap-2 text-xs">
+                  <button
+                    type="button"
+                    className="text-primary underline"
+                    onClick={() => setSelectedRegions(new Set(ALL_REGION_CODES))}
+                  >
+                    전체 선택
+                  </button>
+                  <button
+                    type="button"
+                    className="text-muted-foreground underline"
+                    onClick={() => setSelectedRegions(new Set())}
+                  >
+                    전체 해제
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                {REGION_GROUPS.map((group) => (
+                  <div key={group.group} className="flex flex-wrap items-center gap-1.5">
+                    <span className="mr-1 text-xs text-muted-foreground">{group.group}</span>
+                    {group.regions.map((region) => (
+                      <Chip
+                        key={region.code}
+                        selected={selectedRegions.has(region.code)}
+                        onClick={() => toggleInSet(selectedRegions, setSelectedRegions, region.code)}
+                      >
+                        {region.label}
+                      </Chip>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="mb-2 text-sm font-medium">언어</p>
+              <div className="flex flex-wrap gap-1.5">
+                {LANGUAGE_OPTIONS.map((lang) => (
+                  <Chip
+                    key={lang.code}
+                    selected={selectedLanguages.has(lang.code)}
+                    onClick={() => toggleInSet(selectedLanguages, setSelectedLanguages, lang.code)}
+                  >
+                    {lang.label}
+                  </Chip>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div>
+                <p className="mb-1 text-xs text-muted-foreground">길이</p>
+                <Select value={length} onValueChange={(v) => setLength(v as LengthFilter)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {LENGTH_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <p className="mb-1 text-xs text-muted-foreground">게시일</p>
+                <Select value={dateRange} onValueChange={(v) => setDateRange(v as DateRangeFilter)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {DATE_RANGE_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <p className="mb-1 text-xs text-muted-foreground">최소 조회수</p>
+                <Select value={String(minViewCount)} onValueChange={(v) => setMinViewCount(Number(v) as MinViewFilter)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MIN_VIEW_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={String(o.value)}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <p className="mb-1 text-xs text-muted-foreground">정렬</p>
+                <Select value={sort} onValueChange={(v) => setSort(v as SortOption)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SORT_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox checked={excludeKorean} onCheckedChange={(v) => setExcludeKorean(Boolean(v))} />
+              한국 콘텐츠 제외 (기본 ON — 해외 채널 중심 발굴)
+            </label>
+          </div>
+        )}
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
@@ -145,6 +318,11 @@ export function SourceDiscoveryClient() {
                     <p className="line-clamp-2 text-sm font-medium" title={video.snippet.title}>
                       {video.snippet.title}
                     </p>
+                    {video.translatedTitle && (
+                      <p className="line-clamp-2 text-xs text-primary" title={video.translatedTitle}>
+                        {video.translatedTitle}
+                      </p>
+                    )}
                     <p className="text-xs text-muted-foreground">{video.snippet.channelTitle}</p>
                     <p className="text-xs text-muted-foreground">
                       조회수 {numberFormat.format(Number(video.statistics.viewCount ?? 0))}회
