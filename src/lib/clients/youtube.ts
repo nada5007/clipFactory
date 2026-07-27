@@ -42,6 +42,7 @@ export type YoutubeVideo = {
     channelId: string;
     channelTitle: string;
     publishedAt: string;
+    tags?: string[];
     thumbnails?: { medium?: { url: string } };
   };
   statistics: { viewCount?: string; likeCount?: string; commentCount?: string };
@@ -53,7 +54,7 @@ export type YoutubeVideosResponse = { items: YoutubeVideo[] };
 export type YoutubeChannel = {
   id: string;
   snippet: { title: string };
-  statistics: { subscriberCount?: string; videoCount?: string; viewCount?: string };
+  statistics: { subscriberCount?: string; videoCount?: string; viewCount?: string; hiddenSubscriberCount?: boolean };
   contentDetails: { relatedPlaylists: { uploads: string } };
 };
 

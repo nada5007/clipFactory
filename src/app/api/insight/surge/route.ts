@@ -1,25 +1,65 @@
 import { NextResponse } from "next/server";
 
-import { findSurgedVideos } from "@/server/services/surge.service";
+import type { SurgePeriod } from "@/lib/surge-options";
+import {
+  findSurgedVideos,
+  findSurgedVideosByCategory,
+  findSurgedVideosForChannel,
+} from "@/server/services/surge.service";
 
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
-  const keyword = params.get("keyword")?.trim();
+  const mode = params.get("mode") ?? "keyword";
   const region = params.get("region") ?? undefined;
-  const days = params.get("days");
+  const category = params.get("category") ?? undefined;
+  const videoForm = (params.get("videoForm") as "all" | "short" | "long" | null) ?? undefined;
+  const period = (params.get("period") as SurgePeriod | null) ?? undefined;
   const thresholdParam = params.get("threshold");
-
-  if (!keyword) {
-    return NextResponse.json({ error: "키워드를 입력하세요." }, { status: 400 });
-  }
-
   const threshold = thresholdParam ? Number(thresholdParam) : undefined;
-  const publishedAfter = days
-    ? new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000).toISOString()
+
+  const hiddenGemEnabled = params.get("hiddenGem") === "true";
+  const subscriberCapParam = params.get("subscriberCap");
+  const hiddenGem = hiddenGemEnabled
+    ? { enabled: true, subscriberCap: subscriberCapParam ? Number(subscriberCapParam) : 100_000 }
     : undefined;
 
   try {
-    const result = await findSurgedVideos({ keyword, regionCode: region, publishedAfter, threshold });
+    if (mode === "category") {
+      const seedKeyword = params.get("seedKeyword")?.trim() || undefined;
+      const result = await findSurgedVideosByCategory({
+        regionCode: region,
+        categoryId: category,
+        seedKeyword,
+        videoForm,
+        period,
+        threshold,
+        hiddenGem,
+      });
+      return NextResponse.json(result);
+    }
+
+    if (mode === "channel") {
+      const channelId = params.get("channelId")?.trim();
+      if (!channelId) {
+        return NextResponse.json({ error: "채널 ID를 입력하세요." }, { status: 400 });
+      }
+      const result = await findSurgedVideosForChannel({ channelId, videoForm, period, threshold });
+      return NextResponse.json(result);
+    }
+
+    const keyword = params.get("keyword")?.trim();
+    if (!keyword) {
+      return NextResponse.json({ error: "키워드를 입력하세요." }, { status: 400 });
+    }
+    const result = await findSurgedVideos({
+      keyword,
+      regionCode: region,
+      categoryId: category,
+      videoForm,
+      period,
+      threshold,
+      hiddenGem,
+    });
     return NextResponse.json(result);
   } catch (error) {
     return NextResponse.json(

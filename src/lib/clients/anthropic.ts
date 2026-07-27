@@ -321,6 +321,50 @@ export async function generateScriptPattern(input: {
   return response.parsed_output;
 }
 
+// UI_SPEC.md §7.1 "떡상 영상" "[패턴 분석]" 버튼: 결과 상위 떡상 영상들의 공통 훅·업로드 시간대·길이·주제를 추출한다.
+// 개별 카드의 [대본 패턴](영상 1개 → 새 대본)과 달리, 결과 집합 전체를 대상으로 한 패턴 요약이다.
+const surgePatternAnalysisSchema = z.object({
+  commonHooks: z.array(z.string()).describe("여러 영상에서 반복되는 후킹 패턴 (최대 5개)"),
+  uploadTimePattern: z.string().describe("업로드 시간대 경향에 대한 한국어 설명 한두 문장"),
+  lengthPattern: z.string().describe("영상 길이 경향에 대한 한국어 설명 한두 문장"),
+  topicPattern: z.string().describe("주제·소재의 공통점에 대한 한국어 설명 한두 문장"),
+  summary: z.string().describe("종합 요약 한 문단 — 이 패턴을 재현하려면 무엇을 해야 하는지"),
+});
+
+export type SurgePatternAnalysis = z.infer<typeof surgePatternAnalysisSchema>;
+
+export async function analyzeSurgePatterns(
+  videos: { title: string; publishedAt: string; durationSeconds: number; ratio: number }[],
+): Promise<SurgePatternAnalysis> {
+  const client = getClient();
+  const sample = videos.slice(0, 20);
+
+  const response = await client.messages.parse({
+    model: MODEL,
+    max_tokens: 4000,
+    thinking: { type: "adaptive" },
+    output_config: { effort: "medium", format: zodOutputFormat(surgePatternAnalysisSchema) },
+    system:
+      "너는 YouTube 쇼츠 트렌드 분석가다. 자기 채널 평균 대비 떡상한(폭증한) 영상 목록이 주어진다. " +
+      "제목의 반복되는 후킹 패턴, 업로드 시간대 경향, 영상 길이 경향, 주제 공통점을 찾아 " +
+      "이 패턴을 재현하려면 무엇을 해야 하는지 한국어로 정리한다.",
+    messages: [
+      {
+        role: "user",
+        content: sample
+          .map((v, i) => `${i}. 제목: ${v.title} / 게시: ${v.publishedAt} / 길이: ${v.durationSeconds}초 / 배수: ${v.ratio.toFixed(1)}배`)
+          .join("\n"),
+      },
+    ],
+  });
+
+  if (!response.parsed_output) {
+    throw new Error("패턴 분석 결과를 파싱하지 못했습니다.");
+  }
+
+  return response.parsed_output;
+}
+
 // UI_SPEC.md §7.1 "홈" "오늘의 AI 아이디어": 니치 기반(또는 직접 입력) 쇼츠 아이디어 5개 시드.
 const dailyIdeaSchema = z.object({
   ideas: z

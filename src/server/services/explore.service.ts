@@ -14,7 +14,14 @@ import {
 } from "@/lib/explore-options";
 import { computeEstimatedRevenueKrw, computePerformanceTier, computeVph } from "@/lib/performance-tier";
 import { computeKeywordMarketScore, type KeywordScoreResult } from "@/lib/keyword-score";
+import { expandKeywordTerms, AUTO_EXPAND_RELATED_COUNT } from "@/lib/keyword-expansion";
 import { getNicheKeywordEntry } from "@/lib/niche-keyword-map";
+import {
+  computeNewChannelShare,
+  computeOpportunityScore,
+  computeRecencyScore,
+  type OpportunityScore,
+} from "@/lib/opportunity-score";
 import { looksKorean } from "@/lib/source-discovery";
 import { extractTopTopics, type TopicCount } from "@/lib/tf-idf";
 
@@ -31,20 +38,29 @@ export async function getNichePopularVideos(niche: string) {
 
 const KEYWORD_SEARCH_SAMPLE_SIZE = 50;
 const MAX_BULK_KEYWORDS = 10;
-const AUTO_EXPAND_RELATED_COUNT = 3;
+const TOP_VIDEOS_DISPLAY_COUNT = 25;
+const RELATED_TOPICS_SAMPLE_SIZE = 20;
+const RELATED_TOPICS_COUNT = 10;
 
-export type KeywordMarketAnalysis = KeywordScoreResult & { keyword: string; videos: YoutubeVideo[] };
+export type AnalyzedTopVideo = {
+  videoId: string;
+  title: string;
+  channelTitle: string;
+  thumbnailUrl?: string;
+  viewCount: number;
+  performanceTier: PerformanceTier;
+  vph: number;
+  estimatedRevenueKrw: number;
+  channelSubscriberCount: number;
+};
 
-// UI_SPEC.md §7.1 "탐색·분석" "자동 키워드 확장": 입력 키워드 → 연관 검색어 최대 3개 자동 생성 → 병렬 검색.
-// ANTHROPIC_API_KEY 미설정 등으로 실패해도 원래 키워드만으로 계속 진행한다(보조 기능이므로 연성 실패 허용).
-async function expandKeywordTerms(keyword: string): Promise<string[]> {
-  try {
-    const related = await generateRelatedKeywords(keyword, AUTO_EXPAND_RELATED_COUNT);
-    return Array.from(new Set([keyword, ...related]));
-  } catch {
-    return [keyword];
-  }
-}
+export type KeywordMarketAnalysis = KeywordScoreResult & {
+  keyword: string;
+  videos: YoutubeVideo[];
+  topVideos: AnalyzedTopVideo[];
+  opportunityScore: OpportunityScore;
+  relatedTopics: TopicCount[];
+};
 
 function dedupeVideosById(videos: YoutubeVideo[]): YoutubeVideo[] {
   const seen = new Map<string, YoutubeVideo>();
@@ -93,7 +109,14 @@ export async function analyzeKeywordMarketability(
   const videoIds = Array.from(new Set(searchResults.flatMap((r) => r.items.map((item) => item.id.videoId))));
 
   if (videoIds.length === 0) {
-    return { ...computeKeywordMarketScore([], []), keyword, videos: [] };
+    return {
+      ...computeKeywordMarketScore([], []),
+      keyword,
+      videos: [],
+      topVideos: [],
+      opportunityScore: computeOpportunityScore({ popularity: 0, entryDifficulty: 0, newChannelShare: 0, recency: 0 }),
+      relatedTopics: [],
+    };
   }
 
   const videos = await fetchVideosInBatches(videoIds);
@@ -109,12 +132,49 @@ export async function analyzeKeywordMarketability(
   const scoreChannels = channelIds.map((id) => ({ id, subscriberCount: subscriberByChannelId.get(id) ?? 0 }));
 
   const result = computeKeywordMarketScore(scoreVideos, scoreChannels);
-  return { ...result, keyword, videos };
+
+  // UI_SPEC.md §7.1 "탐색·분석" 분석 모드 "종합 기회 점수": 인기도+진입난이도+신생채널비중+최신성 가중합.
+  const opportunityScore = computeOpportunityScore({
+    popularity: result.searchVolumeScore,
+    entryDifficulty: 100 - Math.round(result.competitionRatio * 100),
+    newChannelShare: computeNewChannelShare(videos.map((v) => subscriberByChannelId.get(v.snippet.channelId) ?? 0)),
+    recency: computeRecencyScore(videos.map((v) => v.snippet.publishedAt)),
+  });
+
+  const now = new Date();
+  const topVideos: AnalyzedTopVideo[] = [...videos]
+    .sort((a, b) => Number(b.statistics.viewCount ?? 0) - Number(a.statistics.viewCount ?? 0))
+    .slice(0, TOP_VIDEOS_DISPLAY_COUNT)
+    .map((v) => {
+      const viewCount = Number(v.statistics.viewCount ?? 0);
+      return {
+        videoId: v.id,
+        title: v.snippet.title,
+        channelTitle: v.snippet.channelTitle,
+        thumbnailUrl: v.snippet.thumbnails?.medium?.url,
+        viewCount,
+        performanceTier: computePerformanceTier(viewCount, v.snippet.publishedAt, now),
+        vph: computeVph(viewCount, v.snippet.publishedAt, now),
+        estimatedRevenueKrw: computeEstimatedRevenueKrw(viewCount, "ALL"),
+        channelSubscriberCount: subscriberByChannelId.get(v.snippet.channelId) ?? 0,
+      };
+    });
+
+  // UI_SPEC.md §7.1 "추천 키워드/태그": 상위 20개 영상의 제목+태그 빈도 분석(AI 호출 아님, 탐색 모드 "핵심 토픽"과 동일 로직).
+  const topForTopics = [...videos]
+    .sort((a, b) => Number(b.statistics.viewCount ?? 0) - Number(a.statistics.viewCount ?? 0))
+    .slice(0, RELATED_TOPICS_SAMPLE_SIZE);
+  const relatedTopics = extractTopTopics(
+    topForTopics.map((v) => [v.snippet.title, ...(v.snippet.tags ?? [])].join(" ")),
+    RELATED_TOPICS_COUNT,
+  );
+
+  return { ...result, keyword, videos, topVideos, opportunityScore, relatedTopics };
 }
 
 // UI_SPEC.md §7.1 "분석(analyze) 모드" "복수 키워드(bulk) 모드": 최대 10개 키워드를 한 번에 비교한다.
 // 응답 크기를 통제하기 위해 videos 원본 목록은 생략하고 점수·통계만 반환한다.
-export type BulkKeywordAnalysis = Omit<KeywordMarketAnalysis, "videos">;
+export type BulkKeywordAnalysis = Omit<KeywordMarketAnalysis, "videos" | "topVideos" | "relatedTopics">;
 
 export async function analyzeKeywordsBulk(
   keywords: string[],
@@ -123,13 +183,14 @@ export async function analyzeKeywordsBulk(
   const trimmed = keywords.map((k) => k.trim()).filter(Boolean).slice(0, MAX_BULK_KEYWORDS);
   const results = await Promise.all(trimmed.map((k) => analyzeKeywordMarketability(k, regionCode)));
   return results.map(
-    ({ score, breakdown, stats, searchVolumeScore, competitionRatio, recommendScore, keyword }) => ({
+    ({ score, breakdown, stats, searchVolumeScore, competitionRatio, recommendScore, opportunityScore, keyword }) => ({
       score,
       breakdown,
       stats,
       searchVolumeScore,
       competitionRatio,
       recommendScore,
+      opportunityScore,
       keyword,
     }),
   );

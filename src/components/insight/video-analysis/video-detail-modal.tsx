@@ -395,12 +395,18 @@ export function VideoDetailModal({
                   <p className="p-2 text-muted-foreground">유사 영상이 없습니다.</p>
                 ) : (
                   detail.similarVideos.map((v) => (
-                    <div key={v.id} className="flex items-center justify-between gap-3 p-2">
-                      <span className="line-clamp-1">{v.title}</span>
+                    <a
+                      key={v.id}
+                      href={`https://www.youtube.com/watch?v=${v.id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center justify-between gap-3 p-2 hover:bg-muted"
+                    >
+                      <span className="line-clamp-1 text-primary hover:underline">{v.title}</span>
                       <span className="shrink-0 text-xs text-muted-foreground">
                         {v.channelTitle} · {numberFormat.format(v.viewCount)}회
                       </span>
-                    </div>
+                    </a>
                   ))
                 )}
               </div>

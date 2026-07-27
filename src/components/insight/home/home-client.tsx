@@ -124,6 +124,22 @@ export function HomeClient() {
       .finally(() => setNicheSaving(false));
   };
 
+  // PROJECT_SPEC.md §2.3 "홈 '나의 니치' 재설정 기능": 최초 설정 후 다시 바꿀 UI 경로가 없던 문제를 해결한다.
+  const resetNiches = () => {
+    setNicheSaving(true);
+    fetch("/api/insight/home/niches", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ niches: [] }),
+    })
+      .then((res) => res.json())
+      .then((data: { niches: string[] }) => {
+        setNiches(data.niches);
+        setNicheDraft(new Set());
+      })
+      .finally(() => setNicheSaving(false));
+  };
+
   const generateIdeas = () => {
     setIdeaGenerating(true);
     setIdeaError(null);
@@ -192,6 +208,11 @@ export function HomeClient() {
             ))
           )}
         </div>
+        {niches.length > 0 && (
+          <Button variant="outline" size="sm" onClick={resetNiches} disabled={nicheSaving}>
+            {nicheSaving ? "초기화 중..." : "초기화"}
+          </Button>
+        )}
       </div>
 
       {!welcomeDismissed && (
@@ -311,7 +332,21 @@ export function HomeClient() {
                 <p className="text-muted-foreground">후킹: {idea.hook}</p>
                 <p className="text-muted-foreground">차별화: {idea.differentiator}</p>
                 <p className="text-muted-foreground">키워드: {idea.keywords.join(", ")}</p>
-                <div className="mt-1 flex justify-end">
+                <div className="mt-1 flex justify-end gap-1.5">
+                  <a
+                    href={`https://www.youtube.com/results?search_query=${encodeURIComponent(idea.keywords[0] ?? idea.title)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center rounded-md border border-input px-3 py-1.5 text-sm hover:bg-muted"
+                  >
+                    ▶ YouTube
+                  </a>
+                  <Link
+                    href={`/analytics/explore?mode=analyze&keyword=${encodeURIComponent(idea.keywords[0] ?? idea.title)}`}
+                    className="inline-flex items-center rounded-md border border-input px-3 py-1.5 text-sm hover:bg-muted"
+                  >
+                    🔍 분석
+                  </Link>
                   <Button
                     variant="outline"
                     size="sm"
@@ -360,14 +395,36 @@ export function HomeClient() {
           ) : (
             <ul className="flex flex-col gap-2">
               {nicheVideos.map((v) => (
-                <li key={v.id} className="text-xs">
-                  <p className="line-clamp-1 font-medium">{v.snippet.title}</p>
-                  <p className="text-muted-foreground">조회수 {numberFormat.format(Number(v.statistics.viewCount ?? 0))}회</p>
+                <li key={v.id}>
+                  <a
+                    href={`https://www.youtube.com/watch?v=${v.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-2 rounded-md hover:bg-muted"
+                  >
+                    <div className="aspect-video w-20 shrink-0 overflow-hidden rounded bg-muted">
+                      {v.snippet.thumbnails?.medium?.url && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={v.snippet.thumbnails.medium.url}
+                          alt={v.snippet.title}
+                          className="size-full object-cover"
+                        />
+                      )}
+                    </div>
+                    <div className="min-w-0 text-xs">
+                      <p className="line-clamp-2 font-medium">{v.snippet.title}</p>
+                      <p className="text-muted-foreground">조회수 {numberFormat.format(Number(v.statistics.viewCount ?? 0))}회</p>
+                    </div>
+                  </a>
                 </li>
               ))}
             </ul>
           )}
-          <Link href="/analytics/explore" className="mt-2 inline-block text-xs text-primary">
+          <Link
+            href={`/analytics/explore?niche=${encodeURIComponent(niches[0] ?? "")}`}
+            className="mt-2 inline-block text-xs text-primary"
+          >
             더보기 →
           </Link>
         </div>

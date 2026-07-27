@@ -59,4 +59,44 @@ describe("detectSurgedVideos", () => {
 
     expect(detectSurgedVideos(videos, baselines, 5)).toEqual([]);
   });
+
+  it("구독자 1만 미만 채널의 영상에는 신생 강자 배지를 붙인다", () => {
+    const videos = [video({ viewCount: 10_000 })];
+    const baselines = [baseline({ subscriberCount: 5_000 })];
+
+    const result = detectSurgedVideos(videos, baselines, 5);
+    expect(result[0].isRisingStar).toBe(true);
+  });
+
+  it("구독자 1만 이상 채널은 신생 강자가 아니다", () => {
+    const videos = [video({ viewCount: 10_000 })];
+    const baselines = [baseline({ subscriberCount: 50_000 })];
+
+    const result = detectSurgedVideos(videos, baselines, 5);
+    expect(result[0].isRisingStar).toBe(false);
+  });
+
+  it("숨겨진 보석 모드: 구독자 상한을 초과한 채널의 영상은 제외한다", () => {
+    const videos = [video({ viewCount: 10_000 })];
+    const baselines = [baseline({ subscriberCount: 200_000 })];
+
+    const result = detectSurgedVideos(videos, baselines, 5, { enabled: true, subscriberCap: 100_000 });
+    expect(result).toEqual([]);
+  });
+
+  it("숨겨진 보석 모드: 구독자 비공개 채널의 영상은 제외한다", () => {
+    const videos = [video({ viewCount: 10_000 })];
+    const baselines = [baseline({ subscriberCount: 100, hiddenSubscriberCount: true })];
+
+    const result = detectSurgedVideos(videos, baselines, 5, { enabled: true, subscriberCap: 100_000 });
+    expect(result).toEqual([]);
+  });
+
+  it("숨겨진 보석 모드가 꺼져 있으면 구독자 상한을 무시한다", () => {
+    const videos = [video({ viewCount: 10_000 })];
+    const baselines = [baseline({ subscriberCount: 999_999_999 })];
+
+    const result = detectSurgedVideos(videos, baselines, 5);
+    expect(result).toHaveLength(1);
+  });
 });

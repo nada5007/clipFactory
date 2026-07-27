@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -86,6 +87,7 @@ const DEFAULT_FILTERS: Filters = {
 };
 
 export function ExploreClient() {
+  const searchParams = useSearchParams();
   const [mode, setMode] = useState<"browse" | "analyze">("browse");
   const [analyzeSeedKeyword, setAnalyzeSeedKeyword] = useState<string | null>(null);
 
@@ -147,7 +149,25 @@ export function ExploreClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters]);
 
+  // UI_SPEC.md §7.1 "홈" 연결성 요구사항: 아이디어 카드 [분석] 버튼(?mode=analyze&keyword=)과
+  // 니치 인기 영상 [더보기](?niche=)에서 딥링크로 진입할 수 있게 한다.
   useEffect(() => {
+    const modeParam = searchParams.get("mode");
+    const keywordParam = searchParams.get("keyword");
+    const nicheParam = searchParams.get("niche");
+
+    if (modeParam === "analyze" && keywordParam) {
+      setMode("analyze");
+      setAnalyzeSeedKeyword(keywordParam);
+      return;
+    }
+
+    if (nicheParam) {
+      setFilters((prev) => ({ ...prev, niche: nicheParam }));
+      fetchVideos({ niche: nicheParam });
+      return;
+    }
+
     fetchVideos();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

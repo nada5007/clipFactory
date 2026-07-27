@@ -100,11 +100,23 @@ export function findExploreCategory(id: string): ExploreCategory {
   return EXPLORE_CATEGORIES.find((c) => c.id === id) ?? EXPLORE_CATEGORIES[0];
 }
 
+// UI_SPEC.md §7.1 "탐색·분석"/"떡상 영상" 스크린샷 기준 15개국.
 export const REGION_OPTIONS = [
   { value: "KR", label: "대한민국" },
   { value: "US", label: "미국" },
   { value: "JP", label: "일본" },
   { value: "GB", label: "영국" },
+  { value: "DE", label: "독일" },
+  { value: "FR", label: "프랑스" },
+  { value: "IN", label: "인도" },
+  { value: "BR", label: "브라질" },
+  { value: "MX", label: "멕시코" },
+  { value: "VN", label: "베트남" },
+  { value: "ID", label: "인도네시아" },
+  { value: "TH", label: "태국" },
+  { value: "TW", label: "대만" },
+  { value: "ES", label: "스페인" },
+  { value: "RU", label: "러시아" },
 ];
 
 export type SortOption = "views" | "recommend";

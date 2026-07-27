@@ -102,6 +102,56 @@ describe("analyzeKeywordMarketability", () => {
     expect(listVideos).toHaveBeenCalledWith(["v1"]);
     expect(listChannels).toHaveBeenCalledWith(["c1"]);
   });
+
+  it("빈 결과에도 topVideos/opportunityScore/relatedTopics 기본값을 포함한다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [] });
+
+    const result = await analyzeKeywordMarketability("존재하지않는키워드456");
+
+    expect(result.topVideos).toEqual([]);
+    expect(result.relatedTopics).toEqual([]);
+    expect(result.opportunityScore.total).toBe(0);
+  });
+
+  it("상위 영상 리스트에 성능등급·VPH·추정수익·구독자수를 채워 반환한다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({
+      items: [{ id: { videoId: "v1" }, snippet: { title: "인기 영상 제목", channelId: "c1", channelTitle: "ch", publishedAt: "2026-01-01T00:00:00Z", thumbnails: {} } }],
+    });
+    vi.mocked(listVideos).mockResolvedValue({
+      items: [
+        {
+          id: "v1",
+          snippet: { title: "인기 영상 제목", channelId: "c1", channelTitle: "ch", publishedAt: new Date().toISOString(), tags: ["태그1"] },
+          statistics: { viewCount: "500000", likeCount: "5000" },
+          contentDetails: { duration: "PT1M" },
+        },
+      ],
+    });
+    vi.mocked(listChannels).mockResolvedValue({
+      items: [
+        {
+          id: "c1",
+          snippet: { title: "ch" },
+          statistics: { subscriberCount: "5000" },
+          contentDetails: { relatedPlaylists: { uploads: "u1" } },
+        },
+      ],
+    });
+
+    const result = await analyzeKeywordMarketability("테스트키워드2");
+
+    expect(result.topVideos).toHaveLength(1);
+    expect(result.topVideos[0]).toMatchObject({
+      videoId: "v1",
+      title: "인기 영상 제목",
+      viewCount: 500000,
+      channelSubscriberCount: 5000,
+    });
+    expect(result.topVideos[0].performanceTier).toBeDefined();
+    expect(result.topVideos[0].vph).toBeGreaterThan(0);
+    expect(result.relatedTopics.length).toBeGreaterThan(0);
+    expect(result.opportunityScore.newChannelShare).toBe(100); // 구독자 5000 < 10만
+  });
 });
 
 describe("getNichePopularVideos", () => {
@@ -264,6 +314,9 @@ describe("analyzeKeywordsBulk", () => {
 
     expect(results).toHaveLength(10);
     expect(results[0]).not.toHaveProperty("videos");
+    expect(results[0]).not.toHaveProperty("topVideos");
+    expect(results[0]).not.toHaveProperty("relatedTopics");
+    expect(results[0].opportunityScore).toBeDefined();
     expect(results[0].keyword).toBe("키워드0");
   });
 });
