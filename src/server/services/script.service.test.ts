@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { generateScript } from "@/lib/clients/anthropic";
+import { generateJsonWithAnthropic, generateScript } from "@/lib/clients/anthropic";
 import { prisma } from "@/lib/prisma";
-import { createOrRegenerateScript } from "@/server/services/script.service";
+import { createOrRegenerateScript, regenerateScriptField } from "@/server/services/script.service";
 
 vi.mock("@/lib/clients/anthropic", () => ({
   generateScript: vi.fn(),
+  generateJsonWithAnthropic: vi.fn(),
 }));
 
 async function createTestProject() {
@@ -101,6 +102,73 @@ describe("createOrRegenerateScript", () => {
       const updated = await prisma.project.findUniqueOrThrow({ where: { id: project.id } });
       expect(updated.status).toBe("FAILED");
       expect(updated.errorMessage).toBe("API 오류");
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+});
+
+describe("regenerateScriptField", () => {
+  afterEach(() => {
+    vi.mocked(generateJsonWithAnthropic).mockReset();
+  });
+
+  async function createTestScript() {
+    const { channel, project } = await createTestProject();
+    const script = await prisma.script.create({
+      data: {
+        projectId: project.id,
+        topic: "테스트 주제",
+        title: "기존 제목",
+        hook: "기존 후킹멘트",
+        body: "기존 대본",
+        imagePrompts: ["a cat", "a dog"],
+        model: "claude-opus-4-8",
+      },
+    });
+    return { channel, project, script };
+  }
+
+  it("title 필드만 재생성해서 다른 필드는 그대로 유지한다", async () => {
+    const { channel, project } = await createTestScript();
+    try {
+      vi.mocked(generateJsonWithAnthropic).mockResolvedValue({ title: "새 제목" });
+
+      const updated = await regenerateScriptField(project.id, {
+        field: "title",
+        modelId: "claude-sonnet-5",
+      });
+
+      expect(updated.title).toBe("새 제목");
+      expect(updated.hook).toBe("기존 후킹멘트");
+      expect(updated.body).toBe("기존 대본");
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("imagePrompts 필드 재생성 시 배열 전체를 교체한다", async () => {
+    const { channel, project } = await createTestScript();
+    try {
+      vi.mocked(generateJsonWithAnthropic).mockResolvedValue({ imagePrompts: ["a bird", "a fish", "a bee"] });
+
+      const updated = await regenerateScriptField(project.id, {
+        field: "imagePrompts",
+        modelId: "claude-sonnet-5",
+      });
+
+      expect(updated.imagePrompts).toEqual(["a bird", "a fish", "a bee"]);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("알 수 없는 모델 ID를 요청하면 에러를 던진다", async () => {
+    const { channel, project } = await createTestScript();
+    try {
+      await expect(
+        regenerateScriptField(project.id, { field: "title", modelId: "no-such-model" }),
+      ).rejects.toThrow("알 수 없는 LLM 모델");
     } finally {
       await cleanup(project.id, channel.id);
     }

@@ -12,8 +12,8 @@ export type JobState = {
   error: string | null;
 };
 
-// 이미지 일괄 생성/렌더링 같은 장시간 작업의 진행률을 SSE(GET /api/projects/:id/events)로 구독한다.
-export function useJobProgress(projectId: string, type: "IMAGES" | "RENDER") {
+// 이미지 일괄 생성/TTS 생성/렌더링 같은 장시간 작업의 진행률을 SSE(GET /api/projects/:id/events)로 구독한다.
+export function useJobProgress(projectId: string, type: "IMAGES" | "RENDER" | "TTS") {
   const [job, setJob] = useState<JobState | null>(null);
   const sourceRef = useRef<EventSource | null>(null);
 

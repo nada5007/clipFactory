@@ -5,15 +5,15 @@ import { getLatestJob } from "@/server/services/job.service";
 
 export const dynamic = "force-dynamic";
 
-const JOB_TYPES: JobType[] = ["IMAGES", "RENDER"];
+const JOB_TYPES: JobType[] = ["IMAGES", "RENDER", "TTS"];
 const POLL_INTERVAL_MS = 500;
 
-// 프로젝트의 장시간 작업(이미지 일괄 생성/렌더링) 진행률을 SSE로 스트리밍한다.
-// ?type=IMAGES|RENDER 로 어떤 작업을 구독할지 지정한다.
+// 프로젝트의 장시간 작업(이미지 일괄 생성/TTS 생성/렌더링) 진행률을 SSE로 스트리밍한다.
+// ?type=IMAGES|RENDER|TTS 로 어떤 작업을 구독할지 지정한다.
 export async function GET(request: Request, { params }: { params: { id: string } }) {
   const type = new URL(request.url).searchParams.get("type") as JobType | null;
   if (!type || !JOB_TYPES.includes(type)) {
-    return NextResponse.json({ error: "type 쿼리 파라미터가 필요합니다 (IMAGES | RENDER)." }, { status: 400 });
+    return NextResponse.json({ error: "type 쿼리 파라미터가 필요합니다 (IMAGES | RENDER | TTS)." }, { status: 400 });
   }
 
   const encoder = new TextEncoder();

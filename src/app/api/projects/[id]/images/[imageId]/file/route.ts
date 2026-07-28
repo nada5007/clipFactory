@@ -8,7 +8,7 @@ export async function GET(
   { params }: { params: { id: string; imageId: string } },
 ) {
   const image = await getImage(params.id, params.imageId);
-  if (!image) {
+  if (!image || !image.filePath) {
     return NextResponse.json({ error: "이미지를 찾을 수 없습니다." }, { status: 404 });
   }
 

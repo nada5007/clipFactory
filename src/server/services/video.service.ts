@@ -26,6 +26,12 @@ export async function renderVideo(projectId: string, onProgress?: JobProgressRep
   if (project.images.length === 0) {
     throw new Error("이미지가 없어 영상을 생성할 수 없습니다. 먼저 이미지를 생성해주세요.");
   }
+  const blankImages = project.images.filter((image) => !image.filePath);
+  if (blankImages.length > 0) {
+    throw new Error(
+      `아직 채워지지 않은 빈 이미지 카드가 ${blankImages.length}개 있습니다. 업로드 또는 재생성으로 먼저 채워주세요.`,
+    );
+  }
 
   const { width, height } = resolveVideoResolution(project.videoFormat);
   const totalDurationMs = project.audioSegments[project.audioSegments.length - 1].endMs;
@@ -45,7 +51,7 @@ export async function renderVideo(projectId: string, onProgress?: JobProgressRep
     );
     await onProgress?.(30, "이미지 슬라이드쇼 생성 중");
 
-    const imagePaths = project.images.map((image) => resolveProjectFilePath(projectId, image.filePath));
+    const imagePaths = project.images.map((image) => resolveProjectFilePath(projectId, image.filePath!));
     const perImageDurationSec = computePerImageDurationSec(totalDurationMs, project.images.length);
     const videoOnlyPath = resolveProjectFilePath(projectId, "video_only.mp4");
     await buildImageSlideshow(

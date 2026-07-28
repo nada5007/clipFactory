@@ -24,6 +24,31 @@ const scriptOutputSchema = z.object({
 
 export type GeneratedScript = z.infer<typeof scriptOutputSchema>;
 
+// PROJECT_SPEC.md §1.3 "스크립트 탭 — UI 전체 확장 요구사항": 필드별 재생성에서 Claude 모델을 선택했을 때 사용한다.
+export async function generateJsonWithAnthropic<T>(
+  modelId: string,
+  system: string,
+  user: string,
+  schema: z.ZodType<T>,
+): Promise<T> {
+  const client = getClient();
+
+  const response = await client.messages.parse({
+    model: modelId,
+    max_tokens: 4000,
+    thinking: { type: "adaptive" },
+    output_config: { effort: "medium", format: zodOutputFormat(schema) },
+    system,
+    messages: [{ role: "user", content: user }],
+  });
+
+  if (!response.parsed_output) {
+    throw new Error("Claude 응답을 파싱하지 못했습니다.");
+  }
+
+  return response.parsed_output;
+}
+
 export type GenerateScriptInput = {
   topic: string;
   durationSeconds: number;

@@ -2,7 +2,9 @@ import type { Job } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { generateImages } from "@/server/services/image.service";
-import { completeJob, failJob, updateJobProgress } from "@/server/services/job.service";
+import { claimPendingJob, completeJob, failJob, updateJobProgress } from "@/server/services/job.service";
+import type { GenerateAudioSegmentsInput } from "@/server/services/tts.service";
+import { generateAudioSegments } from "@/server/services/tts.service";
 import { renderVideo } from "@/server/services/video.service";
 
 const POLL_INTERVAL_MS = 1000;
@@ -14,9 +16,17 @@ async function runJob(job: Job) {
 
   try {
     if (job.type === "IMAGES") {
-      await generateImages(job.projectId, onProgress);
+      const payload = job.payload as {
+        modelKey?: string;
+        promptOverrides?: Record<number, string>;
+        resolution?: "1K" | "2K" | "4K";
+      } | null;
+      await generateImages(job.projectId, payload ?? undefined, onProgress);
     } else if (job.type === "RENDER") {
       await renderVideo(job.projectId, onProgress);
+    } else if (job.type === "TTS") {
+      const payload = job.payload as GenerateAudioSegmentsInput | null;
+      await generateAudioSegments(job.projectId, payload ?? undefined, onProgress);
     }
     await completeJob(job.id);
   } catch (error) {
@@ -29,9 +39,12 @@ async function tick() {
     where: { status: "PENDING" },
     orderBy: { createdAt: "asc" },
   });
-  if (job) {
-    await runJob(job);
-  }
+  if (!job) return;
+
+  const claimed = await claimPendingJob(job.id);
+  if (!claimed) return; // 겹친 tick()이 먼저 선점함
+
+  await runJob(job);
 }
 
 // Next.js Route Handler는 응답을 반환한 뒤 이어지는 fire-and-forget 비동기 작업의 실행을

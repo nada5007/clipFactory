@@ -8,6 +8,8 @@ const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().optional(),
   ELEVENLABS_API_KEY: z.string().optional(),
   IMAGE_API_KEY: z.string().optional(),
+  GEMINI_API_KEY: z.string().optional(),
+  XAI_API_KEY: z.string().optional(),
   YOUTUBE_API_KEY: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),

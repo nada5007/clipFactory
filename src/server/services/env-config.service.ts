@@ -10,7 +10,9 @@ const ENV_PATH = path.join(process.cwd(), ".env");
 export const MANAGED_ENV_KEYS = [
   { key: "ANTHROPIC_API_KEY", label: "Anthropic API 키", description: "스크립트/아이디어 생성" },
   { key: "ELEVENLABS_API_KEY", label: "ElevenLabs API 키", description: "TTS 음성 생성" },
-  { key: "IMAGE_API_KEY", label: "OpenAI API 키", description: "이미지 생성 (gpt-image-1)" },
+  { key: "IMAGE_API_KEY", label: "OpenAI API 키", description: "이미지 생성 (gpt-image-1) / 스크립트 재생성 GPT 모델 / TTS 음성 생성" },
+  { key: "GEMINI_API_KEY", label: "Google Gemini API 키", description: "스크립트 재생성 Gemini 모델" },
+  { key: "XAI_API_KEY", label: "xAI API 키", description: "스크립트 재생성 Grok 모델" },
   { key: "YOUTUBE_API_KEY", label: "YouTube Data API 키", description: "유튜브 데이터 분석 (읽기 전용)" },
   { key: "GOOGLE_OAUTH_CLIENT_ID", label: "Google OAuth 클라이언트 ID", description: "YouTube 업로드 인증" },
   { key: "GOOGLE_OAUTH_CLIENT_SECRET", label: "Google OAuth 클라이언트 보안 비밀", description: "YouTube 업로드 인증" },

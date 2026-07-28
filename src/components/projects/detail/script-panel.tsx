@@ -1,14 +1,19 @@
 "use client";
 
+import { Check, Copy, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { GenerateScriptForm } from "@/components/projects/detail/generate-script-form";
+import { RegenerateFieldDialog } from "@/components/projects/detail/regenerate-field-dialog";
 import { formatDateKo } from "@/lib/format";
 import { scriptTopicStorageKey } from "@/lib/script-topic-injection";
+import type { ScriptField } from "@/lib/script-fields";
 import type { SerializedScript } from "@/types/project";
+
+const IMAGE_PROMPT_MAX_COUNT = 900;
 
 type GenerateInput = {
   topic: string;
@@ -17,16 +22,58 @@ type GenerateInput = {
   includeChannelPrompt: boolean;
 };
 
+function CardHeaderActions({
+  onEdit,
+  onRegenerate,
+  onCopy,
+}: {
+  onEdit?: () => void;
+  onRegenerate: () => void;
+  onCopy: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <div className="flex items-center gap-1">
+      {onEdit && (
+        <Button variant="ghost" size="icon" className="size-7" onClick={onEdit} title="수정">
+          <Pencil className="size-3.5" />
+        </Button>
+      )}
+      <Button variant="ghost" size="icon" className="size-7" onClick={onRegenerate} title="재생성">
+        <RefreshCw className="size-3.5" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-7"
+        onClick={() => {
+          onCopy();
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        }}
+        title="복사"
+      >
+        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+      </Button>
+    </div>
+  );
+}
+
 function EditableField({
   label,
   value,
   multiline,
   onSave,
+  onRegenerate,
+  onCopy,
 }: {
   label: string;
   value: string;
   multiline?: boolean;
   onSave: (next: string) => Promise<void>;
+  onRegenerate: () => void;
+  onCopy: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -41,9 +88,7 @@ function EditableField({
       <div className="flex items-center justify-between rounded-t-lg bg-accent px-4 py-2">
         <span className="text-sm font-medium text-accent-foreground">{label}</span>
         {!editing && (
-          <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>
-            수정
-          </Button>
+          <CardHeaderActions onEdit={() => setEditing(true)} onRegenerate={onRegenerate} onCopy={onCopy} />
         )}
       </div>
       <div className="p-4">
@@ -87,6 +132,119 @@ function EditableField({
   );
 }
 
+function ImagePromptsCard({
+  prompts,
+  onSave,
+  onRegenerate,
+  onCopy,
+}: {
+  prompts: string[];
+  onSave: (next: string[]) => Promise<void>;
+  onRegenerate: () => void;
+  onCopy: () => void;
+}) {
+  const [drafts, setDrafts] = useState(prompts);
+  const [addCount, setAddCount] = useState(1);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setDrafts(prompts);
+  }, [prompts]);
+
+  const dirty = JSON.stringify(drafts) !== JSON.stringify(prompts);
+
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="flex items-center justify-between rounded-t-lg bg-accent px-4 py-2">
+        <span className="text-sm font-medium text-accent-foreground">이미지 프롬프트 ({drafts.length}개)</span>
+        <CardHeaderActions onRegenerate={onRegenerate} onCopy={onCopy} />
+      </div>
+      <div className="flex flex-col gap-3 p-4">
+        {drafts.map((prompt, i) => (
+          <div key={i} className="space-y-1 rounded-md border p-3">
+            <div className="flex items-center justify-between">
+              <span className="rounded bg-secondary px-1.5 py-0.5 text-xs font-medium text-secondary-foreground">
+                #{i + 1}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-6 text-destructive"
+                title="삭제"
+                onClick={() => setDrafts((prev) => prev.filter((_, idx) => idx !== i))}
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
+            </div>
+            <Textarea
+              value={prompt}
+              onChange={(e) =>
+                setDrafts((prev) => prev.map((p, idx) => (idx === i ? e.target.value : p)))
+              }
+              rows={3}
+              className="text-sm"
+            />
+            <p className="text-xs text-muted-foreground">
+              나노바나나 시리즈(표준/고속/프로)는 한글 프롬프트를 지원합니다.
+            </p>
+          </div>
+        ))}
+
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              min={1}
+              max={IMAGE_PROMPT_MAX_COUNT}
+              value={addCount}
+              onChange={(e) => setAddCount(Math.max(1, Number(e.target.value) || 1))}
+              className="w-16"
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                setDrafts((prev) => [
+                  ...prev,
+                  ...Array.from({ length: addCount }, () => ""),
+                ])
+              }
+            >
+              <Plus className="mr-1 size-3.5" />
+              프롬프트 추가
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              ({drafts.length}/{IMAGE_PROMPT_MAX_COUNT})
+            </span>
+          </div>
+
+          {dirty && (
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setDrafts(prompts)}>
+                취소
+              </Button>
+              <Button
+                size="sm"
+                disabled={saving}
+                onClick={async () => {
+                  setSaving(true);
+                  try {
+                    await onSave(drafts.filter((p) => p.trim().length > 0));
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+              >
+                저장
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ScriptPanel({ projectId }: { projectId: string }) {
   const [script, setScript] = useState<SerializedScript | null>(null);
   const [loading, setLoading] = useState(true);
@@ -94,6 +252,8 @@ export function ScriptPanel({ projectId }: { projectId: string }) {
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [injectedTopic, setInjectedTopic] = useState<string | undefined>(undefined);
+  const [configuredKeys, setConfiguredKeys] = useState<Set<string>>(new Set());
+  const [regenerateField, setRegenerateField] = useState<ScriptField | null>(null);
 
   useEffect(() => {
     const key = scriptTopicStorageKey(projectId);
@@ -103,6 +263,17 @@ export function ScriptPanel({ projectId }: { projectId: string }) {
       sessionStorage.removeItem(key);
     }
   }, [projectId]);
+
+  useEffect(() => {
+    fetch("/api/settings/env-keys")
+      .then((res) => res.json())
+      .then((statuses: { key: string; runtimeConfigured: boolean; fileConfigured: boolean }[]) => {
+        setConfiguredKeys(
+          new Set(statuses.filter((s) => s.runtimeConfigured || s.fileConfigured).map((s) => s.key)),
+        );
+      })
+      .catch(() => setConfiguredKeys(new Set()));
+  }, []);
 
   const fetchScript = useCallback(() => {
     setLoading(true);
@@ -152,6 +323,31 @@ export function ScriptPanel({ projectId }: { projectId: string }) {
     setScript(await res.json());
   }
 
+  async function saveImagePrompts(prompts: string[]) {
+    const res = await fetch(`/api/projects/${projectId}/script`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imagePrompts: prompts }),
+    });
+    setScript(await res.json());
+  }
+
+  async function submitRegenerateField(
+    field: ScriptField,
+    input: { customPrompt?: string; modelId: string },
+  ) {
+    const res = await fetch(`/api/projects/${projectId}/script/regenerate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ field, ...input }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.error ?? "재생성에 실패했습니다.");
+    }
+    setScript(await res.json());
+  }
+
   if (loading) {
     return <div className="py-16 text-center text-sm text-muted-foreground">불러오는 중...</div>;
   }
@@ -178,6 +374,13 @@ export function ScriptPanel({ projectId }: { projectId: string }) {
     );
   }
 
+  const FIELD_DIALOG_TITLES: Record<ScriptField, string> = {
+    title: "제목 재생성",
+    hook: "후킹멘트 재생성",
+    body: "대본 재생성",
+    imagePrompts: "이미지 프롬프트 재생성",
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
@@ -190,34 +393,47 @@ export function ScriptPanel({ projectId }: { projectId: string }) {
         </Button>
       </div>
 
-      <EditableField label="제목" value={script.title} onSave={(v) => saveField("title", v)} />
-      <EditableField label="후킹멘트" value={script.hook} onSave={(v) => saveField("hook", v)} />
+      <EditableField
+        label="제목"
+        value={script.title}
+        onSave={(v) => saveField("title", v)}
+        onRegenerate={() => setRegenerateField("title")}
+        onCopy={() => navigator.clipboard.writeText(script.title)}
+      />
+      <EditableField
+        label="후킹멘트"
+        value={script.hook}
+        onSave={(v) => saveField("hook", v)}
+        onRegenerate={() => setRegenerateField("hook")}
+        onCopy={() => navigator.clipboard.writeText(script.hook)}
+      />
       <EditableField
         label="대본"
         value={script.body}
         multiline
         onSave={(v) => saveField("body", v)}
+        onRegenerate={() => setRegenerateField("body")}
+        onCopy={() => navigator.clipboard.writeText(script.body)}
       />
 
-      <div className="rounded-lg border bg-card">
-        <div className="rounded-t-lg bg-accent px-4 py-2">
-          <span className="text-sm font-medium text-accent-foreground">
-            이미지 프롬프트 ({script.imagePrompts.length}개)
-          </span>
-        </div>
-        <div className="flex flex-col gap-2 p-4">
-          {script.imagePrompts.map((prompt, i) => (
-            <div key={i} className="flex gap-2 text-sm">
-              <Badge variant="secondary" className="shrink-0">
-                #{i + 1}
-              </Badge>
-              <p className="text-muted-foreground">{prompt}</p>
-            </div>
-          ))}
-        </div>
-      </div>
+      <ImagePromptsCard
+        prompts={script.imagePrompts}
+        onSave={saveImagePrompts}
+        onRegenerate={() => setRegenerateField("imagePrompts")}
+        onCopy={() => navigator.clipboard.writeText(script.imagePrompts.join("\n\n"))}
+      />
 
       <p className="text-right text-xs text-muted-foreground">✓ 생성 완료 ({script.model})</p>
+
+      {regenerateField && (
+        <RegenerateFieldDialog
+          open
+          onOpenChange={(open) => !open && setRegenerateField(null)}
+          title={FIELD_DIALOG_TITLES[regenerateField]}
+          configuredKeys={configuredKeys}
+          onRegenerate={(input) => submitRegenerateField(regenerateField, input)}
+        />
+      )}
     </div>
   );
 }

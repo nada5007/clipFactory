@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { prisma } from "@/lib/prisma";
 import {
+  claimPendingJob,
   completeJob,
   createJob,
   failJob,
@@ -88,6 +89,35 @@ describe("job.service", () => {
       const latest = await getLatestJob(project.id, "IMAGES");
       expect(latest?.id).toBe(second.id);
       expect(latest?.id).not.toBe(first.id);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("claimPendingJob은 PENDING 작업을 한 번만 선점할 수 있다 (동시성 레이스 방지)", async () => {
+    const { channel, project } = await createTestProject();
+    try {
+      const job = await createJob(project.id, "IMAGES");
+
+      const [first, second] = await Promise.all([claimPendingJob(job.id), claimPendingJob(job.id)]);
+
+      expect([first, second].filter(Boolean)).toHaveLength(1);
+      const updated = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+      expect(updated.status).toBe("RUNNING");
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("이미 RUNNING/완료 상태인 작업은 선점되지 않는다", async () => {
+    const { channel, project } = await createTestProject();
+    try {
+      const job = await createJob(project.id, "IMAGES");
+      await completeJob(job.id);
+
+      const claimed = await claimPendingJob(job.id);
+
+      expect(claimed).toBe(false);
     } finally {
       await cleanup(project.id, channel.id);
     }

@@ -36,6 +36,24 @@ export const API_KEY_GUIDES: Record<ManagedEnvKey, ApiKeyGuide> = {
     links: [{ label: "platform.openai.com", url: "https://platform.openai.com" }],
     note: "gpt-image-1 모델을 사용하려면 조직(Organization) 인증이 필요할 수 있습니다 (Settings → Organization → Verifications).",
   },
+  GEMINI_API_KEY: {
+    steps: [
+      "aistudio.google.com에 접속해 로그인합니다.",
+      "'Get API key' 메뉴에서 'Create API key'를 클릭합니다.",
+      "생성된 키를 복사해 이 페이지의 입력란에 붙여넣고 저장합니다.",
+    ],
+    links: [{ label: "aistudio.google.com", url: "https://aistudio.google.com/apikey" }],
+    note: "스크립트 재생성 모달에서 Gemini 모델을 선택할 때 사용됩니다.",
+  },
+  XAI_API_KEY: {
+    steps: [
+      "console.x.ai에 접속해 로그인(또는 가입)합니다.",
+      "'API Keys' 메뉴에서 새 키를 생성합니다.",
+      "생성된 키를 복사해 이 페이지의 입력란에 붙여넣고 저장합니다.",
+    ],
+    links: [{ label: "console.x.ai", url: "https://console.x.ai" }],
+    note: "스크립트 재생성 모달에서 Grok 모델을 선택할 때 사용됩니다.",
+  },
   YOUTUBE_API_KEY: {
     steps: [
       "console.cloud.google.com에서 프로젝트를 생성하거나 기존 프로젝트를 선택합니다.",

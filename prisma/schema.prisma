@@ -110,6 +110,8 @@ model AudioSegment {
   provider  String
   voiceId   String
   model     String
+  // 프로바이더별 세부 파라미터 (오디오 포맷/음성 지시문/안정성·유사도 부스트·스타일·속도 등)
+  settings  Json?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -124,8 +126,11 @@ model ImageAsset {
   project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   order     Int
   prompt    String
-  filePath  String
+  // null이면 "빈 카드" — 아직 업로드/재생성으로 채워지지 않은 슬롯
+  filePath  String?
   model     String
+  // 이미지 생성 모델의 품질 티어 (예: OpenAI의 low/medium/high). 티어 개념이 없는 모델은 null.
+  quality   String?
   size      String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -163,6 +168,7 @@ model ThumbnailAsset {
 enum JobType {
   IMAGES
   RENDER
+  TTS
 }
 
 enum JobStatus {
@@ -183,6 +189,8 @@ model Job {
   progress  Int       @default(0)
   message   String?
   error     String?
+  // 작업 실행에 필요한 입력값 (예: IMAGES 작업의 모델 선택/장면별 프롬프트 임시 조정)
+  payload   Json?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 

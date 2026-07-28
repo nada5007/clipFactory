@@ -3,15 +3,17 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { synthesizeSpeechWithOpenAi } from "@/lib/clients/openai-tts";
 import { synthesizeSpeech } from "@/lib/clients/tts";
 import { getAudioDurationMs } from "@/lib/ffmpeg";
 import { prisma } from "@/lib/prisma";
-import { generateAudioSegments } from "@/server/services/tts.service";
+import { deleteSegment, generateAudioSegments, regenerateSegment } from "@/server/services/tts.service";
 
 vi.mock("@/lib/clients/tts", async () => {
   const actual = await vi.importActual<typeof import("@/lib/clients/tts")>("@/lib/clients/tts");
   return { ...actual, synthesizeSpeech: vi.fn() };
 });
+vi.mock("@/lib/clients/openai-tts", () => ({ synthesizeSpeechWithOpenAi: vi.fn() }));
 vi.mock("@/lib/ffmpeg", () => ({ getAudioDurationMs: vi.fn() }));
 
 async function createTestProjectWithScript(body: string) {
@@ -90,6 +92,97 @@ describe("generateAudioSegments", () => {
       const updated = await prisma.project.findUniqueOrThrow({ where: { id: project.id } });
       expect(updated.status).toBe("FAILED");
       expect(updated.errorMessage).toBe("TTS API 오류");
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("OpenAI 프로바이더를 기본값으로 지정하면 OpenAI 클라이언트를 사용한다", async () => {
+    const { channel, project } = await createTestProjectWithScript("문장 하나.");
+    try {
+      vi.mocked(synthesizeSpeechWithOpenAi).mockResolvedValue(Buffer.from("fake-audio"));
+      vi.mocked(getAudioDurationMs).mockResolvedValue(1000);
+
+      const segments = await generateAudioSegments(project.id, {
+        defaultOptions: { provider: "openai", model: "gpt-4o-mini-tts", voiceId: "alloy" },
+      });
+
+      expect(segments[0]).toMatchObject({ provider: "openai", voiceId: "alloy", model: "gpt-4o-mini-tts" });
+      expect(synthesizeSpeechWithOpenAi).toHaveBeenCalledTimes(1);
+      expect(synthesizeSpeech).not.toHaveBeenCalled();
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+});
+
+describe("regenerateSegment / deleteSegment", () => {
+  afterEach(() => {
+    vi.mocked(synthesizeSpeech).mockReset();
+    vi.mocked(getAudioDurationMs).mockReset();
+  });
+
+  it("재생성 시 이후 세그먼트들의 startMs/endMs를 실제 길이 기준으로 재계산한다", async () => {
+    const { channel, project } = await createTestProjectWithScript("첫 문장. 둘째 문장. 셋째 문장.");
+    try {
+      vi.mocked(synthesizeSpeech).mockResolvedValue(Buffer.from("fake-audio"));
+      vi.mocked(getAudioDurationMs)
+        .mockResolvedValueOnce(1000)
+        .mockResolvedValueOnce(1000)
+        .mockResolvedValueOnce(1000);
+
+      const segments = await generateAudioSegments(project.id);
+      expect(segments.map((s) => [s.startMs, s.endMs])).toEqual([
+        [0, 1000],
+        [1000, 2000],
+        [2000, 3000],
+      ]);
+
+      // 두 번째 세그먼트를 2000ms짜리로 재생성 → 세 번째 세그먼트의 시작 시각이 뒤로 밀려야 한다.
+      vi.mocked(getAudioDurationMs).mockReset();
+      vi.mocked(getAudioDurationMs)
+        .mockResolvedValueOnce(1000) // 1번
+        .mockResolvedValueOnce(2000) // 2번(재생성됨)
+        .mockResolvedValueOnce(1000); // 3번
+
+      await regenerateSegment(project.id, segments[1].id, {
+        options: { provider: "elevenlabs", model: "eleven_multilingual_v2", voiceId: "voice-x" },
+      });
+
+      const after = await prisma.audioSegment.findMany({ where: { projectId: project.id }, orderBy: { order: "asc" } });
+      expect(after.map((s) => [s.startMs, s.endMs])).toEqual([
+        [0, 1000],
+        [1000, 3000],
+        [3000, 4000],
+      ]);
+      expect(after[1].voiceId).toBe("voice-x");
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("삭제하면 이후 세그먼트들이 앞으로 당겨진다", async () => {
+    const { channel, project } = await createTestProjectWithScript("첫 문장. 둘째 문장. 셋째 문장.");
+    try {
+      vi.mocked(synthesizeSpeech).mockResolvedValue(Buffer.from("fake-audio"));
+      vi.mocked(getAudioDurationMs)
+        .mockResolvedValueOnce(1000)
+        .mockResolvedValueOnce(1000)
+        .mockResolvedValueOnce(1000);
+
+      const segments = await generateAudioSegments(project.id);
+
+      vi.mocked(getAudioDurationMs).mockReset();
+      vi.mocked(getAudioDurationMs).mockResolvedValueOnce(1000).mockResolvedValueOnce(1000);
+
+      await deleteSegment(project.id, segments[0].id);
+
+      const after = await prisma.audioSegment.findMany({ where: { projectId: project.id }, orderBy: { order: "asc" } });
+      expect(after).toHaveLength(2);
+      expect(after.map((s) => [s.startMs, s.endMs])).toEqual([
+        [0, 1000],
+        [1000, 2000],
+      ]);
     } finally {
       await cleanup(project.id, channel.id);
     }

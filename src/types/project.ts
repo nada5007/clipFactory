@@ -50,6 +50,12 @@ export type SerializedAudioSegment = {
   provider: string;
   voiceId: string;
   model: string;
+  settings: {
+    audioFormat?: "mp3" | "wav" | "ogg";
+    instructions?: string;
+    speed?: number;
+    elevenlabs?: { stability: number; similarityBoost: number; style: number; speed: number };
+  } | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -59,8 +65,9 @@ export type SerializedImageAsset = {
   projectId: string;
   order: number;
   prompt: string;
-  filePath: string;
+  filePath: string | null;
   model: string;
+  quality: string | null;
   size: string;
   createdAt: string;
   updatedAt: string;

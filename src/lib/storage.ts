@@ -22,6 +22,10 @@ export function readProjectFile(projectId: string, relativePath: string): Promis
   return fs.readFile(resolveProjectFilePath(projectId, relativePath));
 }
 
+export async function deleteProjectFile(projectId: string, relativePath: string): Promise<void> {
+  await fs.rm(resolveProjectFilePath(projectId, relativePath), { force: true });
+}
+
 // ffmpeg 등 외부 프로세스가 직접 경로에 파일을 쓰기 전에 디렉터리를 미리 만들어둔다.
 export async function ensureProjectDir(projectId: string, relativeDir = "."): Promise<void> {
   await fs.mkdir(resolveProjectFilePath(projectId, relativeDir), { recursive: true });

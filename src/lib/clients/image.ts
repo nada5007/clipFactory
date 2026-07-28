@@ -1,9 +1,9 @@
 import type { VideoFormat } from "@prisma/client";
 
 import { env } from "@/env";
+import type { ImageQuality } from "@/lib/image-models";
 
-// OpenAI gpt-image-1 하나만 연결한다 (개인용 재현 범위 — UI_SPEC의 다수 모델 레지스트리는
-// 채널 설정 이미지 탭을 구현할 때 확장). IMAGE_API_KEY는 PROJECT_SPEC.md §0.2에 이미 선언된
+// OpenAI gpt-image-1을 사용한다. IMAGE_API_KEY는 PROJECT_SPEC.md §0.2에 이미 선언된
 // 범용 이미지 생성 키 이름을 그대로 사용한다.
 export const IMAGE_MODEL = "gpt-image-1";
 
@@ -26,7 +26,11 @@ function requireApiKey(): string {
   return env.IMAGE_API_KEY;
 }
 
-export async function generateImage(prompt: string, size: ImageSize): Promise<Buffer> {
+export async function generateImage(
+  prompt: string,
+  size: ImageSize,
+  quality: ImageQuality = "low",
+): Promise<Buffer> {
   const apiKey = requireApiKey();
 
   const res = await fetch("https://api.openai.com/v1/images/generations", {
@@ -35,7 +39,7 @@ export async function generateImage(prompt: string, size: ImageSize): Promise<Bu
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ model: IMAGE_MODEL, prompt, size, n: 1 }),
+    body: JSON.stringify({ model: IMAGE_MODEL, prompt, size, quality, n: 1 }),
   });
 
   if (!res.ok) {
@@ -47,6 +51,44 @@ export async function generateImage(prompt: string, size: ImageSize): Promise<Bu
   const b64 = json.data[0]?.b64_json;
   if (!b64) {
     throw new Error("이미지 생성 응답에 이미지 데이터가 없습니다.");
+  }
+
+  return Buffer.from(b64, "base64");
+}
+
+// PROJECT_SPEC.md §1.3 "이미지 변환": 기존 이미지(들)를 참고 이미지로 넣어 편집·합성한다.
+export async function editImage(
+  images: Buffer[],
+  prompt: string,
+  size: ImageSize,
+  quality: ImageQuality = "low",
+): Promise<Buffer> {
+  const apiKey = requireApiKey();
+
+  const form = new FormData();
+  form.set("model", IMAGE_MODEL);
+  form.set("prompt", prompt);
+  form.set("size", size);
+  form.set("quality", quality);
+  for (const image of images) {
+    form.append("image[]", new Blob([new Uint8Array(image)], { type: "image/png" }), "image.png");
+  }
+
+  const res = await fetch("https://api.openai.com/v1/images/edits", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form,
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`이미지 변환 요청 실패: ${res.status} ${body}`);
+  }
+
+  const json = (await res.json()) as { data: { b64_json: string }[] };
+  const b64 = json.data[0]?.b64_json;
+  if (!b64) {
+    throw new Error("이미지 변환 응답에 이미지 데이터가 없습니다.");
   }
 
   return Buffer.from(b64, "base64");
