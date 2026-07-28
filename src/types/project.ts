@@ -107,4 +107,29 @@ export type ProjectListResponse = {
   pageSize: number;
 };
 
+export type SerializedBgmTrack = {
+  id: string;
+  youtubeId: string | null;
+  title: string;
+  category: string;
+  durationSec: number | null;
+  filePath: string;
+  source: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BgmSettings = {
+  trackId: string;
+  volumeDb: number;
+  playbackSpeed: number;
+  loop: boolean;
+};
+
+export type EffectiveBgmSettings = {
+  settings: BgmSettings | null;
+  scope: "project" | "channel" | null;
+};
+
 export type { ProjectStatus, ReviewStatus, CreationType, VideoFormat };

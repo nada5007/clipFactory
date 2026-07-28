@@ -80,7 +80,7 @@ export function ProjectDetailClient({ projectId }: { projectId: string }) {
 
       {activeTab === "script" && <ScriptPanel projectId={projectId} />}
       {activeTab === "images" && project && <ImagesPanel projectId={projectId} videoFormat={project.videoFormat} />}
-      {activeTab === "tts" && <TtsPanel projectId={projectId} />}
+      {activeTab === "tts" && project && <TtsPanel projectId={projectId} channelId={project.channelId} />}
       {activeTab === "video" && <VideoPanel projectId={projectId} />}
       {activeTab === "thumbnail" && project && (
         <ThumbnailPanel projectId={projectId} videoFormat={project.videoFormat} />

@@ -1,11 +1,12 @@
 "use client";
 
-import { RefreshCw, Trash2 } from "lucide-react";
+import { Music, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { BgmSettingsDialog } from "@/components/projects/detail/bgm-settings-dialog";
 import { RegenerateAllTtsDialog } from "@/components/projects/detail/regenerate-all-tts-dialog";
 import { RegenerateSegmentDialog } from "@/components/projects/detail/regenerate-segment-dialog";
 import {
@@ -15,7 +16,78 @@ import {
 } from "@/components/projects/detail/tts-provider-fields";
 import { useJobProgress } from "@/hooks/use-job-progress";
 import { formatSecondsRange } from "@/lib/format";
-import type { SerializedAudioSegment } from "@/types/project";
+import type { EffectiveBgmSettings, SerializedAudioSegment, SerializedBgmTrack } from "@/types/project";
+
+function BgmCard({ projectId, channelId }: { projectId: string; channelId: string }) {
+  const [effective, setEffective] = useState<EffectiveBgmSettings | null>(null);
+  const [track, setTrack] = useState<SerializedBgmTrack | null>(null);
+  const [showDialog, setShowDialog] = useState(false);
+
+  const fetchEffective = useCallback(() => {
+    fetch(`/api/projects/${projectId}/bgm-settings/effective`)
+      .then((res) => (res.ok ? res.json() : { settings: null, scope: null }))
+      .then((data: EffectiveBgmSettings) => {
+        setEffective(data);
+        if (data.settings) {
+          fetch(`/api/bgm/${data.settings.trackId}`)
+            .then((res) => (res.ok ? res.json() : null))
+            .then(setTrack);
+        } else {
+          setTrack(null);
+        }
+      });
+  }, [projectId]);
+
+  useEffect(() => {
+    fetchEffective();
+  }, [fetchEffective]);
+
+  return (
+    <div className="rounded-lg border bg-card p-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Music className="size-4 text-primary" />
+          <span className="font-medium">BGM 설정</span>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => setShowDialog(true)}>
+          🎵 BGM 설정 관리
+        </Button>
+      </div>
+
+      {effective?.settings && track ? (
+        <div className="mt-3 space-y-1">
+          <div className="flex items-center gap-2">
+            <Badge variant="outline">{effective.scope === "project" ? "프로젝트 전용" : "채널 기본값"}</Badge>
+            <span className="text-sm font-medium">🎵 {track.title}</span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {track.durationSec ? `${Math.floor(track.durationSec / 60)}분 ${track.durationSec % 60}초` : "길이 정보 없음"}
+            {" · "}
+            {effective.settings.loop ? "자동 반복 재생" : "1회 재생"}
+          </p>
+          <div className="flex gap-4 text-xs text-muted-foreground">
+            <span>볼륨 {effective.settings.volumeDb.toFixed(1)} dB</span>
+            <span>재생 속도 {effective.settings.playbackSpeed.toFixed(2)}x</span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            이 프로젝트에서는 {effective.scope === "project" ? "채널 기본값 대신 위 설정이" : "채널 기본값이"} 적용됩니다.
+          </p>
+        </div>
+      ) : (
+        <p className="mt-3 text-sm text-muted-foreground">아직 BGM이 설정되지 않았습니다.</p>
+      )}
+
+      <BgmSettingsDialog
+        open={showDialog}
+        onOpenChange={setShowDialog}
+        projectId={projectId}
+        channelId={channelId}
+        initialSettings={effective?.settings ?? null}
+        onSaved={fetchEffective}
+      />
+    </div>
+  );
+}
 
 function segmentToFieldsValue(segment: SerializedAudioSegment): TtsFieldsValue {
   const base = DEFAULT_TTS_FIELDS_VALUE;
@@ -42,7 +114,7 @@ function segmentToFieldsValue(segment: SerializedAudioSegment): TtsFieldsValue {
   };
 }
 
-export function TtsPanel({ projectId }: { projectId: string }) {
+export function TtsPanel({ projectId, channelId }: { projectId: string; channelId: string }) {
   const [segments, setSegments] = useState<SerializedAudioSegment[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -137,6 +209,8 @@ export function TtsPanel({ projectId }: { projectId: string }) {
           {generating ? "생성 중..." : segments.length > 0 ? "🎙 음성 재생성" : "🎙 TTS 생성"}
         </Button>
       </div>
+
+      <BgmCard projectId={projectId} channelId={channelId} />
 
       {generating && (
         <div className="space-y-1">
