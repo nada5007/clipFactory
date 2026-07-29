@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, Maximize2 } from "lucide-react";
+import { ArrowLeft, Maximize2, ZoomIn, ZoomOut } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -180,6 +180,80 @@ function SubtitleCard({
   );
 }
 
+// 재생 관련 툴바: 좌측 콘텐츠 영역 위(전 탭 공통)와 하단 타임라인 바로 위, 두 곳에 동일하게 표시된다.
+function PlaybackToolbar({
+  isPlaying,
+  onTogglePlay,
+  onSeekStart,
+  onSeekEnd,
+  playheadMs,
+  durationMs,
+  playbackSpeed,
+  onSpeedChange,
+  zoom,
+  onZoomChange,
+  snapEnabled,
+  onSnapChange,
+}: {
+  isPlaying: boolean;
+  onTogglePlay: () => void;
+  onSeekStart: () => void;
+  onSeekEnd: () => void;
+  playheadMs: number;
+  durationMs: number;
+  playbackSpeed: number;
+  onSpeedChange: (v: number) => void;
+  zoom: number;
+  onZoomChange: (v: number) => void;
+  snapEnabled: boolean;
+  onSnapChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
+      <div className="flex items-center gap-2 text-sm">
+        <button onClick={onSeekStart} className="text-white/60 hover:text-white" title="처음으로 (Home)">
+          |◀
+        </button>
+        <button onClick={onTogglePlay} className="text-white hover:text-white/80" title="재생/일시정지 (Space)">
+          {isPlaying ? "⏸" : "▶"}
+        </button>
+        <button onClick={onSeekEnd} className="text-white/60 hover:text-white" title="끝으로 (End)">
+          ▶|
+        </button>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <span>속도</span>
+        <Slider
+          className="w-20"
+          value={[playbackSpeed]}
+          onValueChange={([v]) => onSpeedChange(v)}
+          min={0.1}
+          max={4}
+          step={0.1}
+        />
+        <span className="w-9 shrink-0">{playbackSpeed.toFixed(1)}x</span>
+      </div>
+      <span>
+        {(playheadMs / 1000).toFixed(2)}s / {(durationMs / 1000).toFixed(2)}s
+      </span>
+      <div className="flex items-center gap-1.5">
+        <ZoomOut className="size-3.5 text-white/40" />
+        <Slider className="w-20" value={[zoom]} onValueChange={([v]) => onZoomChange(v)} min={1} max={100} step={1} />
+        <ZoomIn className="size-3.5 text-white/40" />
+        <span className="w-9 shrink-0">{zoom}%</span>
+      </div>
+      <span className="ml-auto rounded-full bg-white/5 px-2 py-0.5">
+        ⓘ Preview Mode — 애니메이션/전환효과는 렌더링 후 확인
+      </span>
+      <label className="flex items-center gap-1">
+        <Checkbox checked={snapEnabled} onCheckedChange={(v) => onSnapChange(Boolean(v))} />
+        스냅
+      </label>
+      <Maximize2 className="size-3.5" />
+    </div>
+  );
+}
+
 export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const [project, setProject] = useState<SerializedProject | null>(null);
   const [video, setVideo] = useState<SerializedVideoAsset | null>(null);
@@ -327,6 +401,9 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   }
 
   const activeSubtitleClip = isPlaying ? findClipAtMs(getTrackClips("SUBTITLE"), playheadMs) : null;
+  // 미리보기 탭 합성용: 재생 여부와 무관하게 항상 현재 재생헤드 위치의 이미지/자막을 보여준다.
+  const previewImageClip = findClipAtMs(getTrackClips("IMAGE"), playheadMs);
+  const previewSubtitleClip = findClipAtMs(getTrackClips("SUBTITLE"), playheadMs);
 
   function playTtsFrom(atMs: number) {
     const ttsClips = getTrackClips("TTS");
@@ -664,48 +741,6 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
         </div>
       </div>
 
-      {/* 상단 툴바 2행 (재생 컨트롤) */}
-      <div className="flex items-center gap-3 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
-        <div className="flex items-center gap-2 text-sm">
-          <button onClick={() => seekTo(0)} className="text-white/60 hover:text-white" title="처음으로 (Home)">
-            |◀
-          </button>
-          <button onClick={togglePlay} className="text-white hover:text-white/80" title="재생/일시정지 (Space)">
-            {isPlaying ? "⏸" : "▶"}
-          </button>
-          <button
-            onClick={() => seekTo(timeline.durationMs)}
-            className="text-white/60 hover:text-white"
-            title="끝으로 (End)"
-          >
-            ▶|
-          </button>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span>속도</span>
-          <Slider
-            className="w-20"
-            value={[playbackSpeed]}
-            onValueChange={([v]) => setPlaybackSpeed(v)}
-            min={0.1}
-            max={4}
-            step={0.1}
-          />
-          <span className="w-9 shrink-0">{playbackSpeed.toFixed(1)}x</span>
-        </div>
-        <span>
-          {(playheadMs / 1000).toFixed(2)}s / {(timeline.durationMs / 1000).toFixed(2)}s
-        </span>
-        <span className="ml-auto rounded-full bg-white/5 px-2 py-0.5">
-          ⓘ Preview Mode — 애니메이션/전환효과는 렌더링 후 확인
-        </span>
-        <label className="flex items-center gap-1">
-          <Checkbox checked={snapEnabled} onCheckedChange={(v) => setSnapEnabled(Boolean(v))} />
-          스냅
-        </label>
-        <Maximize2 className="size-3.5" />
-      </div>
-
       {rendering && (
         <div className="border-b border-white/10 px-4 py-2">
           <Progress value={job?.progress ?? 0} />
@@ -716,7 +751,24 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
 
       <div className="flex flex-1 overflow-hidden">
         {/* 좌측 콘텐츠 영역 */}
-        <div className="min-w-0 flex-1 overflow-y-auto p-4">
+        <div className="flex min-w-0 flex-1 flex-col">
+          {activeTab !== "final" && (
+            <PlaybackToolbar
+              isPlaying={isPlaying}
+              onTogglePlay={togglePlay}
+              onSeekStart={() => seekTo(0)}
+              onSeekEnd={() => seekTo(timeline.durationMs)}
+              playheadMs={playheadMs}
+              durationMs={timeline.durationMs}
+              playbackSpeed={playbackSpeed}
+              onSpeedChange={setPlaybackSpeed}
+              zoom={zoom}
+              onZoomChange={setZoom}
+              snapEnabled={snapEnabled}
+              onSnapChange={setSnapEnabled}
+            />
+          )}
+          <div className="flex-1 overflow-y-auto p-4">
           {activeTab === "script" && (
             <div className="rounded-lg bg-background p-4 text-foreground">
               <ScriptPanel projectId={projectId} />
@@ -758,8 +810,30 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
             </div>
           )}
           {activeTab === "preview" && (
-            <div className="flex h-full items-center justify-center text-sm text-white/40">
-              합성 미리보기는 다음 라운드(Phase C)에서 지원 예정입니다.
+            <div className="flex h-full items-center justify-center">
+              <div
+                className={cn(
+                  "relative overflow-hidden rounded-lg bg-black",
+                  project?.videoFormat === "SHORT" ? "aspect-[9/16] h-full max-h-[70vh]" : "aspect-video w-full max-w-2xl",
+                )}
+              >
+                {previewImageClip?.payload.sourceId ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    key={previewImageClip.id}
+                    src={`/api/projects/${projectId}/images/${previewImageClip.payload.sourceId}/file`}
+                    alt=""
+                    className="size-full object-cover"
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-sm text-white/30">이미지 없음</div>
+                )}
+                {previewSubtitleClip?.payload.text && (
+                  <p className="absolute inset-x-4 bottom-6 rounded bg-black/60 px-3 py-2 text-center text-base font-medium text-white">
+                    {previewSubtitleClip.payload.text}
+                  </p>
+                )}
+              </div>
             </div>
           )}
           {activeTab === "final" && (
@@ -783,6 +857,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
               )}
             </div>
           )}
+          </div>
         </div>
 
         {/* 리사이즈 핸들: 드래그로 좌측 콘텐츠 ↔ 우측 패널 너비 조절 */}
@@ -986,6 +1061,20 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
         </div>
       </div>
 
+      <PlaybackToolbar
+        isPlaying={isPlaying}
+        onTogglePlay={togglePlay}
+        onSeekStart={() => seekTo(0)}
+        onSeekEnd={() => seekTo(timeline.durationMs)}
+        playheadMs={playheadMs}
+        durationMs={timeline.durationMs}
+        playbackSpeed={playbackSpeed}
+        onSpeedChange={setPlaybackSpeed}
+        zoom={zoom}
+        onZoomChange={setZoom}
+        snapEnabled={snapEnabled}
+        onSnapChange={setSnapEnabled}
+      />
       <TimelineTracks
         timeline={timeline}
         zoom={zoom}
