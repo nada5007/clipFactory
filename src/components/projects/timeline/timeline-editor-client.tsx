@@ -45,6 +45,12 @@ const RIGHT_PANEL_DEFAULT_WIDTH = 288;
 const RIGHT_PANEL_MIN_WIDTH = 220;
 const RIGHT_PANEL_MAX_WIDTH = 560;
 
+// shadcn Button의 outline variant는 bg-background(라이트 테마 전역 변수)를 그대로 쓰기 때문에,
+// 이 다크 테마 에디터에서 className으로 border/text만 덮어쓰면 배경이 밝은 회색으로 남아
+// 흰 글자가 거의 안 보이는 대비 문제가 생긴다. bg까지 함께 덮어써서 고정한다.
+const OUTLINE_BTN = "border-white/20 bg-white/5 text-white hover:bg-white/10 hover:text-white";
+const OUTLINE_BTN_DISABLED = "border-white/10 bg-white/5 text-white/30 hover:bg-white/5 hover:text-white/30";
+
 type TimingSnapshot = { id: string; startMs: number; endMs: number }[];
 
 function snapshotTimings(timeline: PersistedTimeline): TimingSnapshot {
@@ -97,6 +103,8 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
 
   const [activeTab, setActiveTab] = useState<LeftTab>("script");
   const [zoom, setZoom] = useState(100);
+  // 편집 프리뷰 전용 재생 속도(§5.5) — 합성 미리보기 재생 기능은 다음 라운드에서 이 값을 소비할 예정.
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [snapIntervalMs, setSnapIntervalMs] = useState(100);
   const [dismissedLints, setDismissedLints] = useState<Set<string>>(new Set());
@@ -403,7 +411,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
           <Button
             variant="outline"
             size="sm"
-            className="border-white/20 text-white"
+            className={OUTLINE_BTN}
             onClick={handleUndo}
             disabled={history.length === 0}
           >
@@ -412,28 +420,28 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
           <Button
             variant="outline"
             size="sm"
-            className="border-white/20 text-white"
+            className={OUTLINE_BTN}
             onClick={handleRedo}
             disabled={future.length === 0}
           >
             ↷ 다시 실행
           </Button>
-          <Button variant="outline" size="sm" className="border-white/20 text-white" onClick={handleValidate}>
+          <Button variant="outline" size="sm" className={OUTLINE_BTN} onClick={handleValidate}>
             유효성 검사
           </Button>
-          <Button variant="outline" size="sm" className="border-white/20 text-white">
+          <Button variant="outline" size="sm" className={OUTLINE_BTN}>
             품질 분석 {lint.exceedingIds.length > 0 && `(${lint.exceedingIds.length})`}
           </Button>
-          <Button variant="outline" size="sm" className="border-white/10 text-white/30" disabled>
+          <Button variant="outline" size="sm" className={OUTLINE_BTN_DISABLED} disabled>
             라이브러리
           </Button>
-          <Button variant="outline" size="sm" className="border-white/20 text-white" onClick={handleSync} disabled={syncing}>
+          <Button variant="outline" size="sm" className={OUTLINE_BTN} onClick={handleSync} disabled={syncing}>
             {syncing ? "동기화 중..." : "⟳ 동기화"}
           </Button>
-          <Button variant="outline" size="sm" className="border-white/10 text-white/30" disabled title="Phase C 예정">
+          <Button variant="outline" size="sm" className={OUTLINE_BTN_DISABLED} disabled title="Phase C 예정">
             ✨ AI 자동 편집
           </Button>
-          <Button variant="outline" size="sm" className="border-white/10 text-white/30" disabled title="Phase C 예정">
+          <Button variant="outline" size="sm" className={OUTLINE_BTN_DISABLED} disabled title="Phase C 예정">
             🔊 자동 효과음
           </Button>
           <Button size="sm" onClick={handleRender} disabled={rendering}>
@@ -445,7 +453,18 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
       {/* 상단 툴바 2행 (재생 컨트롤) */}
       <div className="flex items-center gap-3 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
         <span className="text-white/30">|◀ ▶ ▶|</span>
-        <span>속도 1x</span>
+        <div className="flex items-center gap-1.5">
+          <span>속도</span>
+          <Slider
+            className="w-20"
+            value={[playbackSpeed]}
+            onValueChange={([v]) => setPlaybackSpeed(v)}
+            min={0.1}
+            max={4}
+            step={0.1}
+          />
+          <span className="w-9 shrink-0">{playbackSpeed.toFixed(1)}x</span>
+        </div>
         <span>
           {(playheadMs / 1000).toFixed(2)}s / {(timeline.durationMs / 1000).toFixed(2)}s
         </span>
@@ -497,7 +516,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                     src={`/api/projects/${projectId}/render/file`}
                   />
                   <a href={`/api/projects/${projectId}/render/file`} download>
-                    <Button variant="outline" className="border-white/20 text-white">
+                    <Button variant="outline" className={OUTLINE_BTN}>
                       다운로드
                     </Button>
                   </a>
@@ -536,13 +555,13 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                 16자, 롱폼 기준)
               </p>
               <div className="mt-2 flex gap-2">
-                <Button size="sm" variant="outline" className="border-white/20 text-white" onClick={handleFixSubtitleLineLength}>
+                <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={handleFixSubtitleLineLength}>
                   자동 줄바꿈으로 수정
                 </Button>
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="text-white/50"
+                  className="text-white/50 hover:bg-white/10 hover:text-white/80"
                   onClick={() => setDismissedLints((prev) => new Set(prev).add("subtitle-line-length"))}
                 >
                   무시
@@ -620,7 +639,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                 )}
 
                 <div className="flex gap-2 pt-1">
-                  <Button size="sm" variant="outline" className="border-white/20 text-white" onClick={handleSplit} disabled={!canSplit}>
+                  <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={handleSplit} disabled={!canSplit}>
                     ✂ 분할(재생헤드)
                   </Button>
                   <Button size="sm" variant="destructive" onClick={handleDeleteClip}>
@@ -677,16 +696,16 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
             <div>
               <p className="mb-1 font-medium">줌 레벨</p>
               <div className="flex items-center gap-2">
-                <Slider value={[zoom]} onValueChange={([v]) => setZoom(v)} min={10} max={1000} step={10} />
+                <Slider value={[zoom]} onValueChange={([v]) => setZoom(v)} min={1} max={100} step={1} />
                 <span className="w-12 shrink-0 text-white/50">{zoom}%</span>
               </div>
               <div className="mt-1 flex gap-1">
-                {[50, 100, 200, 400].map((preset) => (
+                {[10, 25, 50, 100].map((preset) => (
                   <Button
                     key={preset}
                     size="sm"
                     variant="outline"
-                    className="h-6 border-white/20 px-2 text-white"
+                    className={cn("h-6 px-2", OUTLINE_BTN)}
                     onClick={() => setZoom(preset)}
                   >
                     {preset}%
