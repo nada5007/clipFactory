@@ -1,0 +1,280 @@
+import { describe, expect, it } from "vitest";
+
+import { prisma } from "@/lib/prisma";
+import {
+  applySubtitleLineLengthFix,
+  bulkRestoreClipTimings,
+  deleteClip,
+  getOrSyncTimeline,
+  splitClip,
+  syncTimeline,
+  updateClipText,
+  updateClipTiming,
+} from "@/server/services/timeline.service";
+
+async function createTestProject(input: {
+  segments: { order: number; text: string; startMs: number; endMs: number }[];
+  images: { order: number }[];
+}) {
+  const channel = await prisma.channel.create({ data: { name: "테스트 채널", defaultSettings: {} } });
+  const project = await prisma.project.create({
+    data: { title: "테스트 프로젝트", channelId: channel.id, videoFormat: "SHORT", settings: {} },
+  });
+
+  for (const s of input.segments) {
+    await prisma.audioSegment.create({
+      data: {
+        projectId: project.id,
+        order: s.order,
+        text: s.text,
+        startMs: s.startMs,
+        endMs: s.endMs,
+        filePath: `audio/${s.order}.mp3`,
+        provider: "elevenlabs",
+        voiceId: "voice-x",
+        model: "eleven_multilingual_v2",
+      },
+    });
+  }
+  for (const i of input.images) {
+    await prisma.imageAsset.create({
+      data: {
+        projectId: project.id,
+        order: i.order,
+        prompt: `scene ${i.order}`,
+        filePath: `images/${i.order}.png`,
+        model: "gpt-image-1",
+        size: "1024x1536",
+      },
+    });
+  }
+
+  return { channel, project };
+}
+
+async function cleanup(projectId: string, channelId: string) {
+  await prisma.timeline.deleteMany({ where: { projectId } });
+  await prisma.audioSegment.deleteMany({ where: { projectId } });
+  await prisma.imageAsset.deleteMany({ where: { projectId } });
+  await prisma.project.delete({ where: { id: projectId } });
+  await prisma.channel.delete({ where: { id: channelId } });
+}
+
+describe("getOrSyncTimeline / syncTimeline", () => {
+  it("최초 조회 시 자동으로 타임라인+트랙+클립을 생성한다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [
+        { order: 0, text: "첫 문장", startMs: 0, endMs: 1000 },
+        { order: 1, text: "둘째 문장", startMs: 1000, endMs: 2000 },
+      ],
+      images: [{ order: 0 }],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      expect(timeline?.durationMs).toBe(2000);
+      expect(timeline?.tracks).toHaveLength(6);
+
+      const subtitleTrack = timeline?.tracks.find((t) => t.type === "SUBTITLE");
+      expect(subtitleTrack?.clips).toHaveLength(2);
+      const imageTrack = timeline?.tracks.find((t) => t.type === "IMAGE");
+      expect(imageTrack?.clips).toHaveLength(1);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("재동기화 시 수동으로 옮긴 클립의 시간은 보존하고 내용만 갱신한다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [{ order: 0, text: "원본 텍스트", startMs: 0, endMs: 1000 }],
+      images: [],
+    });
+    try {
+      const first = await getOrSyncTimeline(project.id);
+      const subtitleClip = first!.tracks.find((t) => t.type === "SUBTITLE")!.clips[0];
+
+      // 사용자가 드래그로 위치를 옮겼다고 가정 (updateClipTiming의 이웃-클램프는 별도 테스트에서 다루므로
+      // 여기서는 "이미 저장된 임의의 시간"을 직접 반영한다)
+      await prisma.timelineClip.update({ where: { id: subtitleClip.id }, data: { startMs: 200, endMs: 1200 } });
+
+      // 스크립트 쪽 세그먼트 텍스트가 바뀜(다른 화면에서 TTS 재생성 등)
+      await prisma.audioSegment.updateMany({ where: { projectId: project.id }, data: { text: "수정된 텍스트" } });
+
+      const synced = await syncTimeline(project.id);
+      const updatedClip = synced!.tracks.find((t) => t.type === "SUBTITLE")!.clips[0];
+
+      expect(updatedClip.startMs).toBe(200); // 시간은 보존
+      expect(updatedClip.endMs).toBe(1200);
+      expect((updatedClip.payload as { text?: string }).text).toBe("수정된 텍스트"); // 내용은 갱신
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("원본 세그먼트가 삭제되면 해당 클립도 정리된다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [
+        { order: 0, text: "첫 문장", startMs: 0, endMs: 1000 },
+        { order: 1, text: "둘째 문장", startMs: 1000, endMs: 2000 },
+      ],
+      images: [],
+    });
+    try {
+      await getOrSyncTimeline(project.id);
+      await prisma.audioSegment.deleteMany({ where: { projectId: project.id, order: 1 } });
+
+      const synced = await syncTimeline(project.id);
+      const subtitleClips = synced!.tracks.find((t) => t.type === "SUBTITLE")!.clips;
+      expect(subtitleClips).toHaveLength(1);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+});
+
+describe("updateClipTiming", () => {
+  it("이웃 클립 경계를 넘지 못하도록 길이를 유지한 채 클램프한다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [
+        { order: 0, text: "첫 문장", startMs: 0, endMs: 1000 },
+        { order: 1, text: "둘째 문장", startMs: 1000, endMs: 2000 },
+      ],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const clips = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips;
+      const firstClip = clips[0];
+
+      // 두 번째 클립(1000~2000) 경계를 넘어가도록 무리하게 옮기려는 시도
+      const updated = await updateClipTiming(firstClip.id, { startMs: 1500, endMs: 2500 });
+
+      expect(updated.endMs).toBeLessThanOrEqual(1000); // 다음 클립 시작 전에서 멈춤
+      expect(updated.endMs - updated.startMs).toBe(1000); // 길이(1초)는 유지
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+});
+
+describe("splitClip / deleteClip / bulkRestoreClipTimings", () => {
+  it("클립을 지정 시점에서 둘로 나눈다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [{ order: 0, text: "긴 문장", startMs: 0, endMs: 4000 }],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const clip = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips[0];
+
+      const { updated, created } = await splitClip(clip.id, 1500);
+
+      expect(updated).toMatchObject({ startMs: 0, endMs: 1500 });
+      expect(created).toMatchObject({ startMs: 1500, endMs: 4000, trackId: clip.trackId });
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("분할 지점이 클립 바깥이면 에러를 던진다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [{ order: 0, text: "문장", startMs: 0, endMs: 1000 }],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const clip = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips[0];
+      await expect(splitClip(clip.id, 2000)).rejects.toThrow("분할 지점");
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("클립을 삭제할 수 있다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [{ order: 0, text: "문장", startMs: 0, endMs: 1000 }],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const clip = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips[0];
+
+      await deleteClip(clip.id);
+
+      const remaining = await prisma.timelineClip.findMany({ where: { trackId: clip.trackId } });
+      expect(remaining).toHaveLength(0);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("여러 클립의 시간을 한 번에 되돌릴 수 있다(실행 취소)", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [
+        { order: 0, text: "첫 문장", startMs: 0, endMs: 1000 },
+        { order: 1, text: "둘째 문장", startMs: 2000, endMs: 3000 },
+      ],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const clips = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips;
+      const snapshot = clips.map((c) => ({ id: c.id, startMs: c.startMs, endMs: c.endMs }));
+
+      await updateClipTiming(clips[0].id, { startMs: 100, endMs: 100 + (clips[0].endMs - clips[0].startMs) });
+
+      await bulkRestoreClipTimings(snapshot);
+
+      const restored = await prisma.timelineClip.findUniqueOrThrow({ where: { id: clips[0].id } });
+      expect(restored.startMs).toBe(snapshot[0].startMs);
+      expect(restored.endMs).toBe(snapshot[0].endMs);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+});
+
+describe("updateClipText / applySubtitleLineLengthFix", () => {
+  it("텍스트를 바꾸면서 sourceId는 그대로 유지한다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [{ order: 0, text: "원문", startMs: 0, endMs: 1000 }],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const clip = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips[0];
+      const originalSourceId = (clip.payload as { sourceId?: string }).sourceId;
+
+      const updated = await updateClipText(clip.id, "새 텍스트");
+
+      expect((updated.payload as { text?: string }).text).toBe("새 텍스트");
+      expect((updated.payload as { sourceId?: string }).sourceId).toBe(originalSourceId);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("기준 글자수를 초과하는 자막에만 줄바꿈을 넣고 sourceId를 보존한다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [
+        { order: 0, text: "짧은 자막", startMs: 0, endMs: 1000 },
+        { order: 1, text: "이것은 열네 글자를 훌쩍 넘기는 아주 긴 자막 문장입니다", startMs: 1000, endMs: 2000 },
+      ],
+      images: [],
+    });
+    try {
+      await getOrSyncTimeline(project.id);
+
+      const result = await applySubtitleLineLengthFix(project.id);
+      expect(result.fixedCount).toBe(1);
+
+      const timeline = await getOrSyncTimeline(project.id);
+      const clips = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips;
+      const longClip = clips.find((c) => (c.payload as { text?: string }).text?.includes("훌쩍"))!;
+      expect((longClip.payload as { sourceId?: string }).sourceId).toBeTruthy();
+      const lines = (longClip.payload as { text: string }).text.split("\n");
+      expect(lines.every((l) => l.length <= 14)).toBe(true);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+});

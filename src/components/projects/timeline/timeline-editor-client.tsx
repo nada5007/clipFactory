@@ -8,26 +8,21 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { Slider } from "@/components/ui/slider";
+import { Textarea } from "@/components/ui/textarea";
 import { ScriptPanel } from "@/components/projects/detail/script-panel";
 import { TimelineTracks } from "@/components/projects/timeline/timeline-tracks";
 import { useJobProgress } from "@/hooks/use-job-progress";
 import {
   analyzeSubtitleLineLength,
-  buildTimelineTracks,
   computeTimelineStats,
   RECOMMENDED_SUBTITLE_CHARS_PER_LINE,
   validateTimeline,
+  type PersistedTimeline,
+  type PersistedTimelineClip,
   type TimelineValidationResult,
 } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
-import type {
-  EffectiveBgmSettings,
-  SerializedAudioSegment,
-  SerializedBgmTrack,
-  SerializedImageAsset,
-  SerializedProject,
-  SerializedVideoAsset,
-} from "@/types/project";
+import type { SerializedProject, SerializedVideoAsset } from "@/types/project";
 
 type LeftTab = "script" | "subtitle" | "preview" | "final";
 
@@ -50,14 +45,55 @@ const RIGHT_PANEL_DEFAULT_WIDTH = 288;
 const RIGHT_PANEL_MIN_WIDTH = 220;
 const RIGHT_PANEL_MAX_WIDTH = 560;
 
+type TimingSnapshot = { id: string; startMs: number; endMs: number }[];
+
+function snapshotTimings(timeline: PersistedTimeline): TimingSnapshot {
+  return timeline.tracks.flatMap((t) => t.clips.map((c) => ({ id: c.id, startMs: c.startMs, endMs: c.endMs })));
+}
+
+function applySnapshot(timeline: PersistedTimeline, snapshot: TimingSnapshot): PersistedTimeline {
+  const byId = new Map(snapshot.map((s) => [s.id, s]));
+  return {
+    ...timeline,
+    tracks: timeline.tracks.map((t) => ({
+      ...t,
+      clips: t.clips.map((c) => {
+        const s = byId.get(c.id);
+        return s ? { ...c, startMs: s.startMs, endMs: s.endMs } : c;
+      }),
+    })),
+  };
+}
+
+function patchClipInTimeline(
+  timeline: PersistedTimeline,
+  clipId: string,
+  patch: Partial<Pick<PersistedTimelineClip, "startMs" | "endMs" | "payload">>,
+): PersistedTimeline {
+  return {
+    ...timeline,
+    tracks: timeline.tracks.map((t) => ({
+      ...t,
+      clips: t.clips.map((c) => (c.id === clipId ? { ...c, ...patch } : c)),
+    })),
+  };
+}
+
+function findClip(timeline: PersistedTimeline | null, clipId: string | null) {
+  if (!timeline || !clipId) return null;
+  for (const track of timeline.tracks) {
+    const clip = track.clips.find((c) => c.id === clipId);
+    if (clip) return { track, clip };
+  }
+  return null;
+}
+
 export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const [project, setProject] = useState<SerializedProject | null>(null);
-  const [images, setImages] = useState<SerializedImageAsset[]>([]);
-  const [segments, setSegments] = useState<SerializedAudioSegment[]>([]);
   const [video, setVideo] = useState<SerializedVideoAsset | null>(null);
-  const [bgmEffective, setBgmEffective] = useState<EffectiveBgmSettings | null>(null);
-  const [bgmTrack, setBgmTrack] = useState<SerializedBgmTrack | null>(null);
+  const [timeline, setTimeline] = useState<PersistedTimeline | null>(null);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
 
   const [activeTab, setActiveTab] = useState<LeftTab>("script");
   const [zoom, setZoom] = useState(100);
@@ -68,6 +104,13 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const [rendering, setRendering] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { job, start } = useJobProgress(projectId, "RENDER");
+
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [playheadMs, setPlayheadMs] = useState(0);
+  const [textDraft, setTextDraft] = useState("");
+  const [savingText, setSavingText] = useState(false);
+  const [history, setHistory] = useState<TimingSnapshot[]>([]);
+  const [future, setFuture] = useState<TimingSnapshot[]>([]);
 
   const [rightPanelWidth, setRightPanelWidth] = useState(RIGHT_PANEL_DEFAULT_WIDTH);
   const draggingRef = useRef(false);
@@ -103,27 +146,15 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [projectRes, imagesRes, segmentsRes, videoRes, bgmRes] = await Promise.all([
+      const [projectRes, videoRes, timelineRes] = await Promise.all([
         fetch(`/api/projects/${projectId}`),
-        fetch(`/api/projects/${projectId}/images`),
-        fetch(`/api/projects/${projectId}/tts`),
         fetch(`/api/projects/${projectId}/render`),
-        fetch(`/api/projects/${projectId}/bgm-settings/effective`),
+        fetch(`/api/projects/${projectId}/timeline`),
       ]);
 
       setProject(projectRes.ok ? await projectRes.json() : null);
-      setImages(imagesRes.ok ? await imagesRes.json() : []);
-      setSegments(segmentsRes.ok ? await segmentsRes.json() : []);
       setVideo(videoRes.ok ? await videoRes.json() : null);
-
-      const bgm: EffectiveBgmSettings = bgmRes.ok ? await bgmRes.json() : { settings: null, scope: null };
-      setBgmEffective(bgm);
-      if (bgm.settings) {
-        const trackRes = await fetch(`/api/bgm/${bgm.settings.trackId}`);
-        setBgmTrack(trackRes.ok ? await trackRes.json() : null);
-      } else {
-        setBgmTrack(null);
-      }
+      setTimeline(timelineRes.ok ? await timelineRes.json() : null);
     } finally {
       setLoading(false);
     }
@@ -133,25 +164,183 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     fetchAll();
   }, [fetchAll]);
 
-  const timeline = useMemo(
-    () =>
-      buildTimelineTracks({
-        audioSegments: segments,
-        images,
-        bgm:
-          bgmEffective?.settings && bgmTrack
-            ? { title: bgmTrack.title, durationSec: bgmTrack.durationSec, loop: bgmEffective.settings.loop }
-            : null,
-      }),
-    [segments, images, bgmEffective, bgmTrack],
-  );
+  // 원본(스크립트/이미지/BGM)이 다른 화면에서 바뀌었을 수 있으니 재동기화로 최신 상태를 반영한다.
+  // 삭제/생성이 발생할 수 있어 클립 id 기반 실행취소 스택은 더 이상 유효하지 않을 수 있으므로 비운다.
+  async function handleSync() {
+    setSyncing(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/timeline/sync`, { method: "POST" });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? "동기화에 실패했습니다.");
+      setTimeline(await res.json());
+      setHistory([]);
+      setFuture([]);
+      setSelectedClipId(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "동기화에 실패했습니다.");
+    } finally {
+      setSyncing(false);
+    }
+  }
 
-  const stats = useMemo(() => computeTimelineStats(timeline), [timeline]);
-  const lint = useMemo(() => analyzeSubtitleLineLength(segments), [segments]);
+  const stats = useMemo(() => (timeline ? computeTimelineStats(timeline) : null), [timeline]);
+
+  const subtitleClips = useMemo(
+    () => timeline?.tracks.find((t) => t.type === "SUBTITLE")?.clips ?? [],
+    [timeline],
+  );
+  const lint = useMemo(
+    () => analyzeSubtitleLineLength(subtitleClips.map((c) => ({ id: c.id, text: c.payload.text ?? "" }))),
+    [subtitleClips],
+  );
   const lintVisible = lint.exceedingIds.length > 0 && !dismissedLints.has("subtitle-line-length");
 
+  const selected = useMemo(() => findClip(timeline, selectedClipId), [timeline, selectedClipId]);
+  const hasTextField = selected?.track.type === "SUBTITLE" || selected?.track.type === "TTS";
+  const canSplit = selected != null && playheadMs > selected.clip.startMs && playheadMs < selected.clip.endMs;
+
+  useEffect(() => {
+    setTextDraft(selected?.clip.payload.text ?? "");
+  }, [selected?.clip.id, selected?.clip.payload.text]);
+
   function handleValidate() {
-    setValidation(validateTimeline(timeline));
+    if (timeline) setValidation(validateTimeline(timeline));
+  }
+
+  // 드래그/트림(타이밍 변경)은 실행취소 대상이므로 커밋 전에 현재 상태를 히스토리에 남긴다.
+  const commitClipTiming = useCallback(
+    async (clipId: string, startMs: number, endMs: number) => {
+      setTimeline((prev) => {
+        if (!prev) return prev;
+        setHistory((h) => [...h, snapshotTimings(prev)]);
+        setFuture([]);
+        return patchClipInTimeline(prev, clipId, { startMs, endMs });
+      });
+      try {
+        const res = await fetch(`/api/projects/${projectId}/timeline/clips/${clipId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ startMs, endMs }),
+        });
+        if (res.ok) {
+          const updated = await res.json();
+          setTimeline((prev) =>
+            prev ? patchClipInTimeline(prev, clipId, { startMs: updated.startMs, endMs: updated.endMs }) : prev,
+          );
+        } else {
+          await fetchAll();
+        }
+      } catch {
+        await fetchAll();
+      }
+    },
+    [projectId, fetchAll],
+  );
+
+  const handleUndo = useCallback(async () => {
+    if (history.length === 0) return;
+    const prevSnapshot = history[history.length - 1];
+    setTimeline((prev) => {
+      if (!prev) return prev;
+      setFuture((f) => [...f, snapshotTimings(prev)]);
+      return applySnapshot(prev, prevSnapshot);
+    });
+    setHistory((h) => h.slice(0, -1));
+    await fetch(`/api/projects/${projectId}/timeline/clips/bulk`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ updates: prevSnapshot }),
+    });
+  }, [history, projectId]);
+
+  const handleRedo = useCallback(async () => {
+    if (future.length === 0) return;
+    const nextSnapshot = future[future.length - 1];
+    setTimeline((prev) => {
+      if (!prev) return prev;
+      setHistory((h) => [...h, snapshotTimings(prev)]);
+      return applySnapshot(prev, nextSnapshot);
+    });
+    setFuture((f) => f.slice(0, -1));
+    await fetch(`/api/projects/${projectId}/timeline/clips/bulk`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ updates: nextSnapshot }),
+    });
+  }, [future, projectId]);
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      } else if (e.key === "y" || (e.key === "z" && e.shiftKey)) {
+        e.preventDefault();
+        handleRedo();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleUndo, handleRedo]);
+
+  async function handleSaveText() {
+    if (!selected) return;
+    setSavingText(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/timeline/clips/${selected.clip.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: textDraft }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setTimeline((prev) => (prev ? patchClipInTimeline(prev, selected.clip.id, { payload: updated.payload }) : prev));
+      }
+    } finally {
+      setSavingText(false);
+    }
+  }
+
+  async function handleSplit() {
+    if (!selected || !canSplit) return;
+    const res = await fetch(`/api/projects/${projectId}/timeline/clips/${selected.clip.id}/split`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ atMs: playheadMs }),
+    });
+    if (res.ok) {
+      setHistory([]);
+      setFuture([]);
+      setSelectedClipId(null);
+      await fetchAll();
+    } else {
+      setError((await res.json().catch(() => null))?.error ?? "분할에 실패했습니다.");
+    }
+  }
+
+  async function handleDeleteClip() {
+    if (!selected) return;
+    const res = await fetch(`/api/projects/${projectId}/timeline/clips/${selected.clip.id}`, { method: "DELETE" });
+    if (res.ok) {
+      setHistory([]);
+      setFuture([]);
+      setSelectedClipId(null);
+      await fetchAll();
+    } else {
+      setError((await res.json().catch(() => null))?.error ?? "삭제에 실패했습니다.");
+    }
+  }
+
+  async function handleFixSubtitleLineLength() {
+    const res = await fetch(`/api/projects/${projectId}/timeline/quality-fixes/subtitle-line-length`, {
+      method: "POST",
+    });
+    if (res.ok) {
+      await fetchAll();
+    } else {
+      setError((await res.json().catch(() => null))?.error ?? "자막 재구성에 실패했습니다.");
+    }
   }
 
   async function handleRender() {
@@ -178,7 +367,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     }
   }
 
-  if (loading) {
+  if (loading || !timeline) {
     return (
       <div className="flex h-screen items-center justify-center bg-[#0b0d12] text-sm text-white/70">
         불러오는 중...
@@ -211,6 +400,24 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-white/20 text-white"
+            onClick={handleUndo}
+            disabled={history.length === 0}
+          >
+            ↶ 실행 취소
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-white/20 text-white"
+            onClick={handleRedo}
+            disabled={future.length === 0}
+          >
+            ↷ 다시 실행
+          </Button>
           <Button variant="outline" size="sm" className="border-white/20 text-white" onClick={handleValidate}>
             유효성 검사
           </Button>
@@ -220,13 +427,13 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
           <Button variant="outline" size="sm" className="border-white/10 text-white/30" disabled>
             라이브러리
           </Button>
-          <Button variant="outline" size="sm" className="border-white/20 text-white" onClick={fetchAll}>
-            ⟳ 동기화
+          <Button variant="outline" size="sm" className="border-white/20 text-white" onClick={handleSync} disabled={syncing}>
+            {syncing ? "동기화 중..." : "⟳ 동기화"}
           </Button>
-          <Button variant="outline" size="sm" className="border-white/10 text-white/30" disabled title="Phase B/C 예정">
+          <Button variant="outline" size="sm" className="border-white/10 text-white/30" disabled title="Phase C 예정">
             ✨ AI 자동 편집
           </Button>
-          <Button variant="outline" size="sm" className="border-white/10 text-white/30" disabled title="Phase B/C 예정">
+          <Button variant="outline" size="sm" className="border-white/10 text-white/30" disabled title="Phase C 예정">
             🔊 자동 효과음
           </Button>
           <Button size="sm" onClick={handleRender} disabled={rendering}>
@@ -240,7 +447,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
         <span className="text-white/30">|◀ ▶ ▶|</span>
         <span>속도 1x</span>
         <span>
-          00:00.00 / {(timeline.durationMs / 1000).toFixed(2)}s
+          {(playheadMs / 1000).toFixed(2)}s / {(timeline.durationMs / 1000).toFixed(2)}s
         </span>
         <span className="ml-auto rounded-full bg-white/5 px-2 py-0.5">
           ⓘ Preview Mode — 애니메이션/전환효과는 렌더링 후 확인
@@ -270,12 +477,13 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
           )}
           {activeTab === "subtitle" && (
             <div className="flex h-full items-center justify-center text-sm text-white/40">
-              자막 탭은 다음 라운드(Phase B)에서 지원 예정입니다.
+              자막 탭은 다음 라운드(Phase C)에서 지원 예정입니다. 자막 클립은 아래 타임라인에서 선택해 우측
+              속성 패널에서 편집할 수 있습니다.
             </div>
           )}
           {activeTab === "preview" && (
             <div className="flex h-full items-center justify-center text-sm text-white/40">
-              합성 미리보기는 다음 라운드(Phase B)에서 지원 예정입니다.
+              합성 미리보기는 다음 라운드(Phase C)에서 지원 예정입니다.
             </div>
           )}
           {activeTab === "final" && (
@@ -321,21 +529,15 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                 ⚠ 자막 {lint.exceedingIds.length}개의 줄 길이가 {lint.maxLength}자를 초과합니다
               </p>
               <p className="mt-1 text-white/50">
-                권장: {RECOMMENDED_SUBTITLE_CHARS_PER_LINE}자/줄 | 현재 최대: {lint.maxLength}자 (클릭하여{" "}
-                {lint.exceedingIds.length}개 클립 선택)
+                권장: {RECOMMENDED_SUBTITLE_CHARS_PER_LINE}자/줄 | 현재 최대: {lint.maxLength}자
               </p>
               <p className="mt-1 text-white/50">
                 롱폼 한국어 자막은 {RECOMMENDED_SUBTITLE_CHARS_PER_LINE}자/줄이 가장 읽기 좋습니다 (Netflix 기준
                 16자, 롱폼 기준)
               </p>
               <div className="mt-2 flex gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="border-white/20 text-white"
-                  onClick={() => setActiveTab("subtitle")}
-                >
-                  자막 선택 후 재구성
+                <Button size="sm" variant="outline" className="border-white/20 text-white" onClick={handleFixSubtitleLineLength}>
+                  자동 줄바꿈으로 수정
                 </Button>
                 <Button
                   size="sm"
@@ -371,21 +573,80 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
 
           <div className="space-y-3 rounded-md border border-white/10 p-3">
             <p className="font-medium">속성</p>
-            <p className="text-white/40">클립을 선택하세요</p>
-            <p className="rounded-md bg-white/5 p-2 text-white/60">
-              클립을 클릭하여 선택하면 해당 클립의 속성을 편집할 수 있습니다. Ctrl+클릭으로 여러 클립을 선택할 수
-              있습니다.
-            </p>
+            {selected ? (
+              <div className="space-y-2">
+                <p className="text-white/50">{selected.track.name} 클립</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="space-y-1">
+                    <span className="text-white/40">시작(초)</span>
+                    <input
+                      type="number"
+                      step={0.01}
+                      className="w-full rounded border border-white/20 bg-white/5 px-1.5 py-1 text-white"
+                      value={(selected.clip.startMs / 1000).toFixed(2)}
+                      onChange={(e) => {
+                        const startMs = Math.round(Number(e.target.value) * 1000);
+                        if (Number.isFinite(startMs)) commitClipTiming(selected.clip.id, startMs, selected.clip.endMs);
+                      }}
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-white/40">종료(초)</span>
+                    <input
+                      type="number"
+                      step={0.01}
+                      className="w-full rounded border border-white/20 bg-white/5 px-1.5 py-1 text-white"
+                      value={(selected.clip.endMs / 1000).toFixed(2)}
+                      onChange={(e) => {
+                        const endMs = Math.round(Number(e.target.value) * 1000);
+                        if (Number.isFinite(endMs)) commitClipTiming(selected.clip.id, selected.clip.startMs, endMs);
+                      }}
+                    />
+                  </label>
+                </div>
+
+                {hasTextField && (
+                  <div className="space-y-1">
+                    <span className="text-white/40">텍스트</span>
+                    <Textarea
+                      value={textDraft}
+                      onChange={(e) => setTextDraft(e.target.value)}
+                      className="min-h-16 border-white/20 bg-white/5 text-white"
+                    />
+                    <Button size="sm" onClick={handleSaveText} disabled={savingText}>
+                      {savingText ? "저장 중..." : "텍스트 저장"}
+                    </Button>
+                  </div>
+                )}
+
+                <div className="flex gap-2 pt-1">
+                  <Button size="sm" variant="outline" className="border-white/20 text-white" onClick={handleSplit} disabled={!canSplit}>
+                    ✂ 분할(재생헤드)
+                  </Button>
+                  <Button size="sm" variant="destructive" onClick={handleDeleteClip}>
+                    삭제
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <p className="text-white/40">클립을 선택하세요</p>
+                <p className="rounded-md bg-white/5 p-2 text-white/60">
+                  클립을 클릭하여 선택하면 해당 클립의 속성을 편집할 수 있습니다. 타임라인의 눈금자를 클릭하면
+                  재생헤드를 이동할 수 있습니다.
+                </p>
+              </>
+            )}
 
             <div>
               <p className="mb-1 font-medium">타임라인 통계</p>
               <div className="grid grid-cols-2 gap-1 text-white/60">
-                <span>트랙 {stats.trackCount}개</span>
-                <span>총 클립 {stats.totalClips}개</span>
-                <span>길이 {stats.durationSec.toFixed(1)}초</span>
+                <span>트랙 {stats?.trackCount ?? 0}개</span>
+                <span>총 클립 {stats?.totalClips ?? 0}개</span>
+                <span>길이 {(stats?.durationSec ?? 0).toFixed(1)}초</span>
               </div>
               <div className="mt-1 flex flex-wrap gap-1">
-                {stats.clipCountsByTrack
+                {(stats?.clipCountsByTrack ?? [])
                   .filter((t) => t.count > 0)
                   .map((t) => (
                     <span key={t.name} className="rounded bg-white/10 px-1.5 py-0.5">
@@ -449,7 +710,17 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
         </div>
       </div>
 
-      <TimelineTracks timeline={timeline} zoom={zoom} />
+      <TimelineTracks
+        timeline={timeline}
+        zoom={zoom}
+        selectedClipId={selectedClipId}
+        playheadMs={playheadMs}
+        snapEnabled={snapEnabled}
+        snapIntervalMs={snapIntervalMs}
+        onSelectClip={setSelectedClipId}
+        onSeek={setPlayheadMs}
+        onCommitTiming={commitClipTiming}
+      />
     </div>
   );
 }

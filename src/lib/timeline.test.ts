@@ -3,7 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   analyzeSubtitleLineLength,
   buildTimelineTracks,
+  clampClipTiming,
+  clampTrimEnd,
+  clampTrimStart,
+  computeSplitTimes,
   computeTimelineStats,
+  planClipSync,
+  rewrapTextToMaxLineLength,
+  snapToGrid,
   validateTimeline,
 } from "@/lib/timeline";
 
@@ -142,5 +149,116 @@ describe("analyzeSubtitleLineLength", () => {
   it("전부 기준 이내면 빈 배열을 반환한다", () => {
     const result = analyzeSubtitleLineLength([{ id: "1", text: "짧은 자막" }]);
     expect(result.exceedingIds).toEqual([]);
+  });
+});
+
+describe("planClipSync", () => {
+  it("sourceId가 매칭되면 기존 클립의 시간은 두고 내용이 다를 때만 업데이트 대상에 넣는다", () => {
+    const existing = [{ id: "persisted-1", sourceId: "seg-a", label: "옛 텍스트", text: "옛 텍스트" }];
+    const desired = [
+      { id: "sub_seg-a", sourceId: "seg-a", startMs: 0, endMs: 1000, label: "새 텍스트", text: "새 텍스트" },
+    ];
+
+    const plan = planClipSync(existing, desired);
+
+    expect(plan.toCreate).toHaveLength(0);
+    expect(plan.toDeleteIds).toHaveLength(0);
+    expect(plan.toUpdate).toEqual([{ id: "persisted-1", label: "새 텍스트", text: "새 텍스트" }]);
+  });
+
+  it("내용이 동일하면 업데이트 대상에 넣지 않는다(기존 편집 보존)", () => {
+    const existing = [{ id: "persisted-1", sourceId: "seg-a", label: "텍스트", text: "텍스트" }];
+    const desired = [
+      { id: "sub_seg-a", sourceId: "seg-a", startMs: 500, endMs: 1500, label: "텍스트", text: "텍스트" },
+    ];
+
+    const plan = planClipSync(existing, desired);
+    expect(plan.toUpdate).toHaveLength(0);
+  });
+
+  it("desired에만 있는 sourceId는 생성 대상이다", () => {
+    const desired = [{ id: "sub_seg-new", sourceId: "seg-new", startMs: 0, endMs: 1000, label: "새 문장" }];
+    const plan = planClipSync([], desired);
+    expect(plan.toCreate).toEqual(desired);
+  });
+
+  it("existing에만 있는 sourceId는 삭제 대상이다", () => {
+    const existing = [{ id: "persisted-orphan", sourceId: "seg-removed", label: "삭제된 문장" }];
+    const plan = planClipSync(existing, []);
+    expect(plan.toDeleteIds).toEqual(["persisted-orphan"]);
+  });
+
+  it("sourceId가 없는 클립(BGM 등)은 생성/삭제/업데이트 어디에도 포함하지 않는다", () => {
+    const desired = [{ id: "bgm_0", startMs: 0, endMs: 1000, label: "곡" }];
+    const plan = planClipSync([], desired);
+    expect(plan.toCreate).toHaveLength(0);
+  });
+});
+
+describe("snapToGrid", () => {
+  it("가장 가까운 간격 단위로 반올림한다", () => {
+    expect(snapToGrid(1040, 100)).toBe(1000);
+    expect(snapToGrid(1060, 100)).toBe(1100);
+  });
+
+  it("간격이 0 이하이면 그대로 반환한다", () => {
+    expect(snapToGrid(1234, 0)).toBe(1234);
+  });
+});
+
+describe("clampClipTiming", () => {
+  it("범위 안이면 그대로 유지한다", () => {
+    const result = clampClipTiming({ startMs: 1000, endMs: 2000, minMs: 0, maxMs: 5000 });
+    expect(result).toEqual({ startMs: 1000, endMs: 2000 });
+  });
+
+  it("최소 경계를 넘으면 길이를 유지한 채 앞으로 당긴다", () => {
+    const result = clampClipTiming({ startMs: -500, endMs: 500, minMs: 0, maxMs: 5000 });
+    expect(result).toEqual({ startMs: 0, endMs: 1000 });
+  });
+
+  it("최대 경계(이웃 클립)를 넘으면 길이를 유지한 채 뒤로 밀어낸다", () => {
+    const result = clampClipTiming({ startMs: 4800, endMs: 5800, minMs: 0, maxMs: 5000 });
+    expect(result).toEqual({ startMs: 4000, endMs: 5000 });
+  });
+});
+
+describe("clampTrimStart / clampTrimEnd", () => {
+  it("최소 경계 안쪽이면 그대로 둔다", () => {
+    expect(clampTrimStart({ startMs: 500, endMs: 2000, minMs: 0 })).toBe(500);
+    expect(clampTrimEnd({ startMs: 500, endMs: 2000, maxMs: 5000 })).toBe(2000);
+  });
+
+  it("최소 경계를 넘으면 경계값으로 클램프한다", () => {
+    expect(clampTrimStart({ startMs: -200, endMs: 2000, minMs: 0 })).toBe(0);
+  });
+
+  it("최소 길이(기본 100ms) 밑으로는 줄어들지 않는다", () => {
+    expect(clampTrimStart({ startMs: 1950, endMs: 2000, minMs: 0 })).toBe(1900);
+    expect(clampTrimEnd({ startMs: 1000, endMs: 1050, maxMs: 5000 })).toBe(1100);
+  });
+});
+
+describe("computeSplitTimes", () => {
+  it("클립 내부 지점이면 둘로 나눈다", () => {
+    const result = computeSplitTimes({ startMs: 1000, endMs: 3000 }, 2000);
+    expect(result).toEqual({ first: { startMs: 1000, endMs: 2000 }, second: { startMs: 2000, endMs: 3000 } });
+  });
+
+  it("클립 양끝이나 바깥이면 null을 반환한다", () => {
+    expect(computeSplitTimes({ startMs: 1000, endMs: 3000 }, 1000)).toBeNull();
+    expect(computeSplitTimes({ startMs: 1000, endMs: 3000 }, 3000)).toBeNull();
+    expect(computeSplitTimes({ startMs: 1000, endMs: 3000 }, 500)).toBeNull();
+  });
+});
+
+describe("rewrapTextToMaxLineLength", () => {
+  it("기준 글자수를 넘는 줄에만 줄바꿈을 넣는다", () => {
+    const result = rewrapTextToMaxLineLength("이것은 열네 글자를 훌쩍 넘기는 긴 자막입니다", 14);
+    expect(result.split("\n").every((line) => line.length <= 14)).toBe(true);
+  });
+
+  it("이미 기준 이내면 그대로 둔다", () => {
+    expect(rewrapTextToMaxLineLength("짧은 자막", 14)).toBe("짧은 자막");
   });
 });

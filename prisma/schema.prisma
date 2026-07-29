@@ -74,6 +74,7 @@ model Project {
   images        ImageAsset[]
   video         VideoAsset?
   thumbnail     ThumbnailAsset?
+  timeline      Timeline?
   jobs          Job[]
   uploadConfig  UploadConfig?
   createdAt     DateTime       @default(now())
@@ -163,6 +164,59 @@ model ThumbnailAsset {
   height    Int
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+enum TimelineTrackType {
+  SUBTITLE
+  VIDEO
+  IMAGE
+  TTS
+  AUDIO
+  BGM
+}
+
+// UI_SPEC.md §5.6 데이터 모델. PROJECT_SPEC.md §1.3 "타임라인 편집기 Phase B":
+// "동기화"가 Script/ImageAsset/AudioSegment/BGM 설정으로부터 클립을 생성·갱신하고,
+// 이후 드래그/트림/분할 등 실제 편집 상태는 이 테이블들에 저장된다.
+model Timeline {
+  id         String          @id @default(cuid())
+  projectId  String          @unique
+  project    Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  durationMs Int             @default(0)
+  tracks     TimelineTrack[]
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+}
+
+model TimelineTrack {
+  id         String            @id @default(cuid())
+  timelineId String
+  timeline   Timeline          @relation(fields: [timelineId], references: [id], onDelete: Cascade)
+  type       TimelineTrackType
+  name       String
+  order      Int
+  visible    Boolean           @default(true)
+  locked     Boolean           @default(false)
+  clips      TimelineClip[]
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  @@unique([timelineId, type])
+}
+
+model TimelineClip {
+  id        String        @id @default(cuid())
+  trackId   String
+  track     TimelineTrack @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  startMs   Int
+  endMs     Int
+  // 타입별 내용: { sourceId?, label, text? } — sourceId로 원본 레코드(AudioSegment/ImageAsset 등)와 매칭해
+  // "동기화"가 편집된 시간은 보존하고 내용만 갱신할 수 있도록 한다.
+  payload   Json
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@index([trackId])
 }
 
 // PROJECT_SPEC.md §1.3 "BGM 설정": 프로젝트에 종속되지 않는 전역 BGM 라이브러리.

@@ -3,6 +3,8 @@
     "allow": [
       "Bash(git init *)",
       "Bash(git add *)",
+      "Bash(grep *)",
+      "Bash(curl *)",
       "Bash(grep -iE \"\\\\.env$|\\\\.db$|dev\\\\.db|storage/\")",
       "Bash(git commit -m ' *)",
       "Bash(gh auth *)",
@@ -42,3 +44,4 @@
     ]
   }
 }
+
