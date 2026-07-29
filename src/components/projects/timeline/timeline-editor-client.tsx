@@ -18,6 +18,7 @@ import {
   computeTimelineStats,
   RECOMMENDED_SUBTITLE_CHARS_PER_LINE,
   validateTimeline,
+  type PersistedClipPayload,
   type PersistedTimeline,
   type PersistedTimelineClip,
   type TimelineValidationResult,
@@ -37,10 +38,13 @@ const LEFT_TABS: { key: LeftTab; label: string }[] = [
 
 const SHORTCUTS: { key: string; label: string }[] = [
   { key: "Space", label: "재생/일시정지" },
-  { key: "Ctrl + 휠", label: "줌 인/아웃" },
   { key: "Home / End", label: "처음/끝으로" },
-  { key: "Ctrl+S", label: "저장" },
   { key: "Ctrl+Z / Ctrl+Y", label: "실행 취소/다시 실행" },
+  { key: "S", label: "선택 클립 분할(재생헤드 위치)" },
+  { key: "Ctrl+C / Ctrl+X", label: "복사 / 잘라내기" },
+  { key: "Ctrl+V / Ctrl+D", label: "붙여넣기 / 복제" },
+  { key: "Delete", label: "선택 클립 삭제" },
+  { key: "Ctrl+클릭", label: "멀티 셀렉트 토글" },
 ];
 
 const RIGHT_PANEL_DEFAULT_WIDTH = 288;
@@ -276,6 +280,10 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const { job, start } = useJobProgress(projectId, "RENDER");
 
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [multiSelectedIds, setMultiSelectedIds] = useState<Set<string>>(new Set());
+  const clipboardRef = useRef<{ trackId: string; payload: PersistedClipPayload; durationMs: number }[]>([]);
+  const [breathingGapMs, setBreathingGapMs] = useState(300);
+  const [targetLengthSec, setTargetLengthSec] = useState(60);
   const [playheadMs, setPlayheadMs] = useState(0);
   const [textDraft, setTextDraft] = useState("");
   const [savingText, setSavingText] = useState(false);
@@ -379,6 +387,28 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const selected = useMemo(() => findClip(timeline, selectedClipId), [timeline, selectedClipId]);
   const hasTextField = selected?.track.type === "SUBTITLE" || selected?.track.type === "TTS";
   const canSplit = selected != null && playheadMs > selected.clip.startMs && playheadMs < selected.clip.endMs;
+
+  // multiSelectedIds는 "현재 작업 대상 전체"(복사/삭제/갭제거 등)를, selectedClipId는 "마지막으로 클릭한
+  // 클립"(속성 패널 표시용)을 가리킨다. 일반 클릭은 둘 다 그 클립 하나로 맞추고, Ctrl/Cmd+클릭만 토글한다.
+  function handleSelectClip(clipId: string | null, additive: boolean) {
+    if (clipId === null) {
+      setSelectedClipId(null);
+      setMultiSelectedIds(new Set());
+      return;
+    }
+    if (additive) {
+      setMultiSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(clipId)) next.delete(clipId);
+        else next.add(clipId);
+        return next;
+      });
+      setSelectedClipId(clipId);
+    } else {
+      setSelectedClipId(clipId);
+      setMultiSelectedIds(new Set([clipId]));
+    }
+  }
 
   useEffect(() => {
     setTextDraft(selected?.clip.payload.text ?? "");
@@ -586,6 +616,41 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleUndo, handleRedo]);
 
+  // 복사/잘라내기/붙여넣기/복제/삭제/분할(S) 단축키 — 이 핸들러들은 selectedClipId 등에 의존해 매 렌더마다
+  // 새로 만들어지므로, ref에 최신 버전을 담아 마운트 시 한 번만 등록한 리스너에서 항상 최신 함수를 참조한다.
+  const editShortcutsRef = useRef({ handleCopy, handleCut, handlePaste, handleDuplicateSelected, handleDeleteClip, handleSplit, canSplit });
+  editShortcutsRef.current = { handleCopy, handleCut, handlePaste, handleDuplicateSelected, handleDeleteClip, handleSplit, canSplit };
+
+  useEffect(() => {
+    function handleEditKeys(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      const isTyping = !!target && ["INPUT", "TEXTAREA"].includes(target.tagName);
+      if (isTyping) return;
+      const h = editShortcutsRef.current;
+      const meta = e.ctrlKey || e.metaKey;
+      if (meta && e.key === "c") {
+        e.preventDefault();
+        h.handleCopy();
+      } else if (meta && e.key === "x") {
+        e.preventDefault();
+        h.handleCut();
+      } else if (meta && e.key === "v") {
+        e.preventDefault();
+        h.handlePaste();
+      } else if (meta && e.key === "d") {
+        e.preventDefault();
+        h.handleDuplicateSelected();
+      } else if (e.key === "Delete") {
+        e.preventDefault();
+        h.handleDeleteClip();
+      } else if ((e.key === "s" || e.key === "S") && !meta) {
+        if (h.canSplit) h.handleSplit();
+      }
+    }
+    window.addEventListener("keydown", handleEditKeys);
+    return () => window.removeEventListener("keydown", handleEditKeys);
+  }, []);
+
   async function handleSaveText() {
     if (!selected) return;
     setSavingText(true);
@@ -615,22 +680,150 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
       setHistory([]);
       setFuture([]);
       setSelectedClipId(null);
+      setMultiSelectedIds(new Set());
       await fetchAll();
     } else {
       setError((await res.json().catch(() => null))?.error ?? "분할에 실패했습니다.");
     }
   }
 
+  function currentSelectionIds(): string[] {
+    if (multiSelectedIds.size > 0) return Array.from(multiSelectedIds);
+    return selectedClipId ? [selectedClipId] : [];
+  }
+
+  // 멀티 셀렉트를 지원하는 삭제 — 속성 패널의 "삭제" 버튼, Delete 단축키에서 공용으로 쓴다.
   async function handleDeleteClip() {
-    if (!selected) return;
-    const res = await fetch(`/api/projects/${projectId}/timeline/clips/${selected.clip.id}`, { method: "DELETE" });
+    const ids = currentSelectionIds();
+    if (ids.length === 0) return;
+    const res = await fetch(`/api/projects/${projectId}/timeline/clips/bulk`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
     if (res.ok) {
       setHistory([]);
       setFuture([]);
       setSelectedClipId(null);
+      setMultiSelectedIds(new Set());
       await fetchAll();
     } else {
       setError((await res.json().catch(() => null))?.error ?? "삭제에 실패했습니다.");
+    }
+  }
+
+  function handleCopy() {
+    const ids = new Set(currentSelectionIds());
+    if (ids.size === 0 || !timeline) return;
+    const items: { trackId: string; payload: PersistedClipPayload; durationMs: number }[] = [];
+    for (const track of timeline.tracks) {
+      for (const clip of track.clips) {
+        if (ids.has(clip.id)) {
+          items.push({ trackId: track.id, payload: clip.payload, durationMs: clip.endMs - clip.startMs });
+        }
+      }
+    }
+    clipboardRef.current = items;
+  }
+
+  async function handleCut() {
+    if (currentSelectionIds().length === 0) return;
+    handleCopy();
+    await handleDeleteClip();
+  }
+
+  // 붙여넣기(Ctrl+V)/복사(Ctrl+C): 리플 삽입은 하지 않고 재생헤드부터 이웃 경계 안으로 클램프해 배치한다.
+  async function handlePaste() {
+    const items = clipboardRef.current;
+    if (items.length === 0) return;
+    const byTrack = new Map<string, { payload: PersistedClipPayload; durationMs: number }[]>();
+    for (const item of items) {
+      const arr = byTrack.get(item.trackId) ?? [];
+      arr.push({ payload: item.payload, durationMs: item.durationMs });
+      byTrack.set(item.trackId, arr);
+    }
+    for (const [trackId, group] of Array.from(byTrack)) {
+      await fetch(`/api/projects/${projectId}/timeline/tracks/${trackId}/paste`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ atMs: playheadMs, items: group }),
+      });
+    }
+    setHistory([]);
+    setFuture([]);
+    await fetchAll();
+  }
+
+  async function handleDuplicateSelected() {
+    const ids = currentSelectionIds();
+    if (ids.length === 0) return;
+    let lastError: string | null = null;
+    for (const id of ids) {
+      const res = await fetch(`/api/projects/${projectId}/timeline/clips/${id}/duplicate`, { method: "POST" });
+      if (!res.ok) lastError = (await res.json().catch(() => null))?.error ?? "복제에 실패했습니다.";
+    }
+    setHistory([]);
+    setFuture([]);
+    await fetchAll();
+    if (lastError) setError(lastError);
+  }
+
+  async function handleRemoveTrackGaps() {
+    if (!selected) return;
+    const res = await fetch(`/api/projects/${projectId}/timeline/tracks/${selected.track.id}/remove-gaps`, { method: "POST" });
+    if (res.ok) {
+      setHistory([]);
+      setFuture([]);
+      await fetchAll();
+    } else {
+      setError((await res.json().catch(() => null))?.error ?? "갭 제거에 실패했습니다.");
+    }
+  }
+
+  async function handleRemoveGapsBetweenSelected() {
+    if (multiSelectedIds.size < 2) return;
+    const res = await fetch(`/api/projects/${projectId}/timeline/clips/remove-gaps-between`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: Array.from(multiSelectedIds) }),
+    });
+    if (res.ok) {
+      setHistory([]);
+      setFuture([]);
+      await fetchAll();
+    } else {
+      setError((await res.json().catch(() => null))?.error ?? "갭 제거에 실패했습니다.");
+    }
+  }
+
+  async function handleAddBreathingGaps() {
+    const res = await fetch(`/api/projects/${projectId}/timeline/tts-breathing-gaps`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ gapMs: breathingGapMs }),
+    });
+    if (res.ok) {
+      setTimeline(await res.json());
+      setHistory([]);
+      setFuture([]);
+    } else {
+      setError((await res.json().catch(() => null))?.error ?? "호흡구간 추가에 실패했습니다.");
+    }
+  }
+
+  async function handleScaleTrack() {
+    if (!selected) return;
+    const res = await fetch(`/api/projects/${projectId}/timeline/tracks/${selected.track.id}/scale-to-duration`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetDurationMs: Math.round(targetLengthSec * 1000) }),
+    });
+    if (res.ok) {
+      setHistory([]);
+      setFuture([]);
+      await fetchAll();
+    } else {
+      setError((await res.json().catch(() => null))?.error ?? "길이 조정에 실패했습니다.");
     }
   }
 
@@ -790,7 +983,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                     isSelected={selectedClipId === clip.id}
                     isActive={activeSubtitleClip?.id === clip.id}
                     onSelect={() => {
-                      setSelectedClipId(clip.id);
+                      handleSelectClip(clip.id, false);
                       seekTo(clip.startMs);
                     }}
                     onSave={async (text) => {
@@ -926,7 +1119,14 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
           )}
 
           <div className="space-y-3 rounded-md border border-white/10 p-3">
-            <p className="font-medium">속성</p>
+            <p className="flex items-center justify-between font-medium">
+              속성
+              {multiSelectedIds.size > 1 && (
+                <span className="rounded-full bg-sky-400/20 px-2 py-0.5 text-[11px] font-normal text-sky-300">
+                  {multiSelectedIds.size}개 선택됨
+                </span>
+              )}
+            </p>
             {selected && (selected.track.type === "SUBTITLE" || selected.track.type === "VIDEO") ? (
               <ClipPropertiesPanel
                 projectId={projectId}
@@ -1092,14 +1292,104 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
         snapEnabled={snapEnabled}
         onSnapChange={setSnapEnabled}
       />
+
+      {/* 편집 도구: 클립보드(복사/잘라내기/붙여넣기/복제/삭제) + 갭 제거 + 호흡구간 + 목표 길이 맞추기 */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
+        <div className="flex items-center gap-1">
+          <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={handleCopy} title="복사 (Ctrl+C)">
+            ⧉ 복사
+          </Button>
+          <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={handleCut} title="잘라내기 (Ctrl+X)">
+            ✂ 잘라내기
+          </Button>
+          <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={handlePaste} title="붙여넣기 (Ctrl+V)">
+            📋 붙여넣기
+          </Button>
+          <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={handleDuplicateSelected} title="복제 (Ctrl+D)">
+            ⿻ 복제
+          </Button>
+          <Button size="sm" variant="destructive" onClick={handleDeleteClip} title="삭제 (Delete)">
+            🗑 삭제
+          </Button>
+        </div>
+
+        <span className="text-white/20">|</span>
+
+        <Button
+          size="sm"
+          variant="outline"
+          className={OUTLINE_BTN}
+          onClick={handleRemoveTrackGaps}
+          disabled={!selected}
+          title="선택한 클립이 속한 트랙의 모든 갭을 제거"
+        >
+          트랙 갭 제거
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className={OUTLINE_BTN}
+          onClick={handleRemoveGapsBetweenSelected}
+          disabled={multiSelectedIds.size < 2}
+          title="Ctrl+클릭으로 2개 이상 선택 후 사용"
+        >
+          선택 사이 갭 제거
+        </Button>
+
+        <span className="text-white/20">|</span>
+
+        <div className="flex items-center gap-1">
+          <span>호흡구간</span>
+          <select
+            className="rounded border border-white/20 bg-white/5 px-1 py-1 text-white"
+            value={breathingGapMs}
+            onChange={(e) => setBreathingGapMs(Number(e.target.value))}
+          >
+            {[100, 150, 200, 250, 300, 350, 400, 450, 500].map((ms) => (
+              <option key={ms} value={ms}>
+                {(ms / 1000).toFixed(2)}초
+              </option>
+            ))}
+          </select>
+          <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={handleAddBreathingGaps}>
+            TTS 전체에 추가
+          </Button>
+        </div>
+
+        <span className="text-white/20">|</span>
+
+        <div className="flex items-center gap-1">
+          <span>목표 길이(초)</span>
+          <input
+            type="number"
+            step={0.1}
+            min={0.1}
+            className="w-16 rounded border border-white/20 bg-white/5 px-1.5 py-1 text-white"
+            value={targetLengthSec}
+            onChange={(e) => setTargetLengthSec(Number(e.target.value))}
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            className={OUTLINE_BTN}
+            onClick={handleScaleTrack}
+            disabled={!selected}
+            title="선택한 클립이 속한 트랙 전체를 비례 조정"
+          >
+            선택 트랙에 적용
+          </Button>
+        </div>
+      </div>
+
       <TimelineTracks
         timeline={timeline}
         zoom={zoom}
         selectedClipId={selectedClipId}
+        multiSelectedIds={multiSelectedIds}
         playheadMs={playheadMs}
         snapEnabled={snapEnabled}
         snapIntervalMs={snapIntervalMs}
-        onSelectClip={setSelectedClipId}
+        onSelectClip={handleSelectClip}
         onSeek={seekTo}
         onCommitTiming={commitClipTiming}
       />

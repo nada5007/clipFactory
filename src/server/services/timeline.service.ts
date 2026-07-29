@@ -5,8 +5,12 @@ import {
   buildTimelineTracks,
   clampClipTiming,
   computeSplitTimes,
+  insertBreathingGaps,
   planClipSync,
+  removeGapsBetweenSelectedClips,
+  removeGapsInClips,
   rewrapTextToMaxLineLength,
+  scaleClipsToTargetDuration,
   type PersistedClipPayload,
   type SubtitleStyle,
   type TimelineClip,
@@ -344,6 +348,131 @@ export async function updateClipVideoProps(
   if (props.keyframes !== undefined) next.keyframes = { ...payload.keyframes, ...props.keyframes };
 
   return prisma.timelineClip.update({ where: { id: clipId }, data: { payload: next satisfies ClipPayload } });
+}
+
+// 복제(Ctrl+D): 원본 클립 바로 뒤에 같은 길이로 삽입한다(다음 클립 경계 안으로 클램프, 자리가 없으면 에러).
+// sourceId는 비워서 동기화 매칭 대상에서 제외한다(분할처럼 sourceId가 중복되는 문제를 피하기 위함 — 알려진 이슈).
+export async function duplicateClip(clipId: string) {
+  const clip = await prisma.timelineClip.findUniqueOrThrow({ where: { id: clipId } });
+  const duration = clip.endMs - clip.startMs;
+  const timeline = await prisma.timeline.findFirstOrThrow({ where: { tracks: { some: { id: clip.trackId } } } });
+  const next = await prisma.timelineClip.findFirst({
+    where: { trackId: clip.trackId, startMs: { gte: clip.endMs }, id: { not: clip.id } },
+    orderBy: { startMs: "asc" },
+  });
+  const maxMs = next?.startMs ?? timeline.durationMs;
+  const startMs = clip.endMs;
+  const endMs = Math.min(startMs + duration, maxMs);
+  if (endMs <= startMs) {
+    throw new Error("복제할 공간이 없습니다. 뒤 클립과 붙어 있으면 먼저 자리를 만들어주세요.");
+  }
+
+  const payload = toClipPayload(clip.payload);
+  const duplicatePayload: ClipPayload = { ...payload, sourceId: undefined };
+  return prisma.timelineClip.create({
+    data: { trackId: clip.trackId, startMs, endMs, payload: duplicatePayload as Prisma.InputJsonValue },
+  });
+}
+
+// 붙여넣기(Ctrl+V): 클립보드에 담긴 클립(들)을 atMs부터 순서대로 삽입한다. 뒤 클립을 밀어내는 리플 삽입은
+// 하지 않고, 기존 드래그/트림처럼 이웃 경계 안으로 클램프해 배치한다(자리가 부족하면 그 뒤 항목은 생략).
+export async function pasteClips(
+  trackId: string,
+  atMs: number,
+  items: { payload: ClipPayload; durationMs: number }[],
+) {
+  const timeline = await prisma.timeline.findFirstOrThrow({ where: { tracks: { some: { id: trackId } } } });
+  const existing = await prisma.timelineClip.findMany({ where: { trackId }, orderBy: { startMs: "asc" } });
+
+  const created = [];
+  let cursor = atMs;
+  for (const item of items) {
+    const next = existing.find((c) => c.startMs >= cursor);
+    const maxMs = next?.startMs ?? timeline.durationMs;
+    const startMs = cursor;
+    const endMs = Math.min(startMs + item.durationMs, maxMs);
+    if (endMs <= startMs) break;
+
+    const clip = await prisma.timelineClip.create({
+      data: {
+        trackId,
+        startMs,
+        endMs,
+        payload: { ...item.payload, sourceId: undefined } as Prisma.InputJsonValue,
+      },
+    });
+    created.push(clip);
+    existing.push(clip);
+    existing.sort((a, b) => a.startMs - b.startMs);
+    cursor = endMs;
+  }
+
+  return created;
+}
+
+// 멀티 셀렉트 삭제 / 잘라내기(Ctrl+X)에서 재사용.
+export async function bulkDeleteClips(clipIds: string[]) {
+  await prisma.timelineClip.deleteMany({ where: { id: { in: clipIds } } });
+}
+
+// "전체 갭 제거": 트랙의 모든 클립을 순서대로 빈틈없이 당겨 붙인다.
+export async function removeTrackGaps(trackId: string) {
+  const clips = await prisma.timelineClip.findMany({ where: { trackId } });
+  const updates = removeGapsInClips(clips);
+  await prisma.$transaction(
+    updates.map((u) => prisma.timelineClip.update({ where: { id: u.id }, data: { startMs: u.startMs, endMs: u.endMs } })),
+  );
+}
+
+// 멀티 셀렉트 "선택 클립 사이 갭만 제거": 선택된 클립끼리만 첫 클립 위치부터 당겨 붙인다.
+export async function removeGapsBetweenClips(clipIds: string[]) {
+  const clips = await prisma.timelineClip.findMany({ where: { id: { in: clipIds } } });
+  if (clips.length === 0) return;
+  const trackId = clips[0].trackId;
+  if (clips.some((c) => c.trackId !== trackId)) {
+    throw new Error("같은 트랙의 클립만 선택해주세요.");
+  }
+  const updates = removeGapsBetweenSelectedClips(clips, new Set(clipIds));
+  await prisma.$transaction(
+    updates.map((u) => prisma.timelineClip.update({ where: { id: u.id }, data: { startMs: u.startMs, endMs: u.endMs } })),
+  );
+}
+
+// TTS 호흡구간 추가: TTS·자막 클립은 항상 같은 순서 구조로 동기화되므로, 같은 인덱스만큼 함께 밀어내 싱크를 유지한다.
+export async function addTtsBreathingGaps(projectId: string, gapMs: number) {
+  const timeline = await ensureTimelineShell(projectId);
+  const ttsTrack = await prisma.timelineTrack.findFirstOrThrow({
+    where: { timelineId: timeline.id, type: "TTS" },
+    include: { clips: { orderBy: { startMs: "asc" } } },
+  });
+  const subtitleTrack = await prisma.timelineTrack.findFirstOrThrow({
+    where: { timelineId: timeline.id, type: "SUBTITLE" },
+    include: { clips: { orderBy: { startMs: "asc" } } },
+  });
+
+  const ttsUpdates = insertBreathingGaps(ttsTrack.clips, gapMs);
+  const subtitleUpdates = insertBreathingGaps(subtitleTrack.clips, gapMs);
+
+  await prisma.$transaction([
+    ...ttsUpdates.map((u) => prisma.timelineClip.update({ where: { id: u.id }, data: { startMs: u.startMs, endMs: u.endMs } })),
+    ...subtitleUpdates.map((u) => prisma.timelineClip.update({ where: { id: u.id }, data: { startMs: u.startMs, endMs: u.endMs } })),
+  ]);
+
+  const addedMs = gapMs * Math.max(0, ttsTrack.clips.length - 1);
+  await prisma.timeline.update({ where: { id: timeline.id }, data: { durationMs: timeline.durationMs + addedMs } });
+
+  return getTimeline(projectId);
+}
+
+// 목표 길이 맞추기: 트랙 전체(0~마지막 클립 끝)를 targetDurationMs로 비례 스케일한다.
+// TTS 트랙에 쓰면 클립 길이(재생 시간)가 바뀌는데, 현재 렌더링은 오디오를 자르거나 무음으로 채우는 방식이라
+// 실제 배속(atempo) 처리는 하지 않는다 — 알려진 제약.
+export async function scaleTrackToTargetDuration(trackId: string, targetDurationMs: number) {
+  const clips = await prisma.timelineClip.findMany({ where: { trackId } });
+  const updates = scaleClipsToTargetDuration(clips, targetDurationMs);
+  await prisma.$transaction(
+    updates.map((u) => prisma.timelineClip.update({ where: { id: u.id }, data: { startMs: u.startMs, endMs: u.endMs } })),
+  );
 }
 
 export type { TimelineClip };

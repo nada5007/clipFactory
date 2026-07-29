@@ -524,3 +524,63 @@ export function computeAudioRenderPlan(
 
   return segments;
 }
+
+// ── 트랙 편집 도구: 갭 제거 / 호흡구간 삽입 / 목표 길이 맞추기 ────────────────────────
+
+export type ClipTimingUpdate = { id: string; startMs: number; endMs: number };
+
+// "전체 갭 제거": 트랙의 모든 클립을 순서대로 빈틈없이 당겨 붙인다(첫 클립의 시작 위치부터).
+export function removeGapsInClips(clips: { id: string; startMs: number; endMs: number }[]): ClipTimingUpdate[] {
+  const sorted = [...clips].sort((a, b) => a.startMs - b.startMs);
+  let cursor = sorted[0]?.startMs ?? 0;
+  return sorted.map((c) => {
+    const duration = c.endMs - c.startMs;
+    const result = { id: c.id, startMs: cursor, endMs: cursor + duration };
+    cursor += duration;
+    return result;
+  });
+}
+
+// 멀티 셀렉트 "선택 클립 사이 갭만 제거": 선택된 클립끼리만 첫 클립 위치부터 당겨 붙이고,
+// 선택되지 않은 클립은 건드리지 않는다(선택 클립 사이에 비선택 클립이 끼어있는 경우는 겹칠 수 있음 — 알려진 단순화).
+export function removeGapsBetweenSelectedClips(
+  clips: { id: string; startMs: number; endMs: number }[],
+  selectedIds: Set<string>,
+): ClipTimingUpdate[] {
+  const selected = clips.filter((c) => selectedIds.has(c.id)).sort((a, b) => a.startMs - b.startMs);
+  if (selected.length === 0) return [];
+  let cursor = selected[0].startMs;
+  return selected.map((c) => {
+    const duration = c.endMs - c.startMs;
+    const result = { id: c.id, startMs: cursor, endMs: cursor + duration };
+    cursor += duration;
+    return result;
+  });
+}
+
+// TTS 호흡구간 추가: 클립 사이(마지막 클립 뒤 제외)에 gapMs만큼 균일하게 벌리고, 이후 클립들을 누적으로 밀어낸다.
+export function insertBreathingGaps(
+  clips: { id: string; startMs: number; endMs: number }[],
+  gapMs: number,
+): ClipTimingUpdate[] {
+  const sorted = [...clips].sort((a, b) => a.startMs - b.startMs);
+  let shift = 0;
+  return sorted.map((c, i) => {
+    const result = { id: c.id, startMs: c.startMs + shift, endMs: c.endMs + shift };
+    if (i < sorted.length - 1) shift += gapMs;
+    return result;
+  });
+}
+
+// 목표 길이 맞추기: 트랙 전체(0 ~ 마지막 클립 끝)를 targetDurationMs에 맞춰 원점 기준으로 비례 스케일한다.
+export function scaleClipsToTargetDuration(
+  clips: { id: string; startMs: number; endMs: number }[],
+  targetDurationMs: number,
+): ClipTimingUpdate[] {
+  if (clips.length === 0) return [];
+  const sorted = [...clips].sort((a, b) => a.startMs - b.startMs);
+  const currentSpan = Math.max(...sorted.map((c) => c.endMs));
+  if (currentSpan <= 0) return sorted.map((c) => ({ id: c.id, startMs: c.startMs, endMs: c.endMs }));
+  const scale = targetDurationMs / currentSpan;
+  return sorted.map((c) => ({ id: c.id, startMs: Math.round(c.startMs * scale), endMs: Math.round(c.endMs * scale) }));
+}

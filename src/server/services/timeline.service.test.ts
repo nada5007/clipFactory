@@ -2,10 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { prisma } from "@/lib/prisma";
 import {
+  addTtsBreathingGaps,
   applySubtitleLineLengthFix,
+  bulkDeleteClips,
   bulkRestoreClipTimings,
   deleteClip,
+  duplicateClip,
   getOrSyncTimeline,
+  pasteClips,
+  removeGapsBetweenClips,
+  removeTrackGaps,
+  scaleTrackToTargetDuration,
   splitClip,
   syncTimeline,
   updateClipText,
@@ -273,6 +280,202 @@ describe("updateClipText / applySubtitleLineLengthFix", () => {
       expect((longClip.payload as { sourceId?: string }).sourceId).toBeTruthy();
       const lines = (longClip.payload as { text: string }).text.split("\n");
       expect(lines.every((l) => l.length <= 14)).toBe(true);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+});
+
+describe("duplicateClip", () => {
+  it("바로 뒤 클립과 붙어있으면(여유 공간 없음) 에러를 던진다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [
+        { order: 0, text: "첫 문장", startMs: 0, endMs: 1000 },
+        { order: 1, text: "둘째 문장", startMs: 1000, endMs: 2000 },
+      ],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const clip = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips[0];
+      await expect(duplicateClip(clip.id)).rejects.toThrow("복제할 공간");
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("트림으로 생긴 여유 공간에는 sourceId 없이 복제된다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [{ order: 0, text: "문장", startMs: 0, endMs: 1000 }],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const clip = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips[0];
+      // 클립을 트림해 뒤쪽에 여유 공간을 만든다(트랙 자체 길이 1000ms는 그대로 유지됨).
+      await prisma.timelineClip.update({ where: { id: clip.id }, data: { endMs: 400 } });
+
+      const duplicate = await duplicateClip(clip.id);
+      expect(duplicate.startMs).toBe(400);
+      expect(duplicate.endMs).toBe(800);
+      expect((duplicate.payload as { sourceId?: string }).sourceId).toBeUndefined();
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+});
+
+describe("pasteClips / bulkDeleteClips", () => {
+  it("붙여넣은 클립들을 atMs부터 순서대로 자리가 있는 만큼만 배치한다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [{ order: 0, text: "문장", startMs: 0, endMs: 1000 }],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const track = timeline!.tracks.find((t) => t.type === "SUBTITLE")!;
+      await prisma.timelineClip.deleteMany({ where: { trackId: track.id } }); // 빈 트랙에서 붙여넣기 검증
+
+      const created = await pasteClips(track.id, 0, [
+        { payload: { label: "A" }, durationMs: 300 },
+        { payload: { label: "B" }, durationMs: 300 },
+      ]);
+
+      expect(created).toHaveLength(2);
+      expect(created[0]).toMatchObject({ startMs: 0, endMs: 300 });
+      expect(created[1]).toMatchObject({ startMs: 300, endMs: 600 });
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("여러 클립을 한 번에 삭제한다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [
+        { order: 0, text: "첫 문장", startMs: 0, endMs: 1000 },
+        { order: 1, text: "둘째 문장", startMs: 1000, endMs: 2000 },
+      ],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const clips = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips;
+      await bulkDeleteClips(clips.map((c) => c.id));
+
+      const remaining = await prisma.timelineClip.findMany({ where: { trackId: clips[0].trackId } });
+      expect(remaining).toHaveLength(0);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+});
+
+describe("removeTrackGaps / removeGapsBetweenClips", () => {
+  it("트랙의 모든 클립을 빈틈없이 당겨 붙인다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [
+        { order: 0, text: "첫 문장", startMs: 0, endMs: 1000 },
+        { order: 1, text: "둘째 문장", startMs: 1000, endMs: 2000 },
+      ],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const clips = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips;
+      // 트림으로 클립 사이에 빈틈을 만든다.
+      await prisma.timelineClip.update({ where: { id: clips[0].id }, data: { endMs: 500 } });
+
+      await removeTrackGaps(clips[0].trackId);
+
+      const updated = await prisma.timelineClip.findMany({ where: { trackId: clips[0].trackId }, orderBy: { startMs: "asc" } });
+      expect(updated.map((c) => [c.startMs, c.endMs])).toEqual([
+        [0, 500],
+        [500, 1500],
+      ]);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("선택된 클립끼리만 당겨 붙인다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [
+        { order: 0, text: "첫 문장", startMs: 0, endMs: 1000 },
+        { order: 1, text: "둘째 문장", startMs: 1000, endMs: 2000 },
+        { order: 2, text: "셋째 문장", startMs: 2000, endMs: 3000 },
+      ],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const clips = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips;
+      await prisma.timelineClip.update({ where: { id: clips[1].id }, data: { startMs: 1500, endMs: 2000 } });
+
+      await removeGapsBetweenClips([clips[1].id, clips[2].id]);
+
+      const c1 = await prisma.timelineClip.findUniqueOrThrow({ where: { id: clips[1].id } });
+      const c2 = await prisma.timelineClip.findUniqueOrThrow({ where: { id: clips[2].id } });
+      expect([c1.startMs, c1.endMs]).toEqual([1500, 2000]);
+      expect([c2.startMs, c2.endMs]).toEqual([2000, 3000]);
+
+      const c0 = await prisma.timelineClip.findUniqueOrThrow({ where: { id: clips[0].id } });
+      expect([c0.startMs, c0.endMs]).toEqual([0, 1000]); // 선택 안 된 클립은 그대로
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+});
+
+describe("addTtsBreathingGaps", () => {
+  it("TTS와 자막 클립을 같은 폭만큼 밀어내고 타임라인 길이를 늘린다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [
+        { order: 0, text: "첫 문장", startMs: 0, endMs: 1000 },
+        { order: 1, text: "둘째 문장", startMs: 1000, endMs: 2000 },
+      ],
+      images: [],
+    });
+    try {
+      await getOrSyncTimeline(project.id);
+      const updated = await addTtsBreathingGaps(project.id, 300);
+
+      const ttsClips = updated!.tracks.find((t) => t.type === "TTS")!.clips;
+      const subtitleClips = updated!.tracks.find((t) => t.type === "SUBTITLE")!.clips;
+      expect(ttsClips.map((c) => [c.startMs, c.endMs])).toEqual([
+        [0, 1000],
+        [1300, 2300],
+      ]);
+      expect(subtitleClips.map((c) => [c.startMs, c.endMs])).toEqual([
+        [0, 1000],
+        [1300, 2300],
+      ]);
+      expect(updated!.durationMs).toBe(2300);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+});
+
+describe("scaleTrackToTargetDuration", () => {
+  it("트랙 전체를 목표 길이에 맞춰 비례 스케일한다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [
+        { order: 0, text: "첫 문장", startMs: 0, endMs: 1000 },
+        { order: 1, text: "둘째 문장", startMs: 1000, endMs: 2000 },
+      ],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const clips = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips;
+
+      await scaleTrackToTargetDuration(clips[0].trackId, 4000);
+
+      const updated = await prisma.timelineClip.findMany({ where: { trackId: clips[0].trackId }, orderBy: { startMs: "asc" } });
+      expect(updated.map((c) => [c.startMs, c.endMs])).toEqual([
+        [0, 2000],
+        [2000, 4000],
+      ]);
     } finally {
       await cleanup(project.id, channel.id);
     }

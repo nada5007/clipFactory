@@ -51,6 +51,7 @@ export function TimelineTracks({
   timeline,
   zoom,
   selectedClipId,
+  multiSelectedIds,
   playheadMs,
   snapEnabled,
   snapIntervalMs,
@@ -61,10 +62,12 @@ export function TimelineTracks({
   timeline: PersistedTimeline;
   zoom: number;
   selectedClipId: string | null;
+  multiSelectedIds: Set<string>;
   playheadMs: number;
   snapEnabled: boolean;
   snapIntervalMs: number;
-  onSelectClip: (clipId: string | null) => void;
+  // additive=true(Ctrl/Cmd+클릭)면 멀티 셀렉트에 토글, false면 단일 선택으로 교체. clipId=null이면 전체 해제.
+  onSelectClip: (clipId: string | null, additive: boolean) => void;
   onSeek: (ms: number) => void;
   onCommitTiming: (clipId: string, startMs: number, endMs: number) => void;
 }) {
@@ -143,7 +146,7 @@ export function TimelineTracks({
     };
   }, []);
 
-  function beginInteraction(
+  function handleClipMouseDown(
     mode: InteractionMode,
     track: PersistedTimelineTrack,
     clip: PersistedTimelineClip,
@@ -151,8 +154,21 @@ export function TimelineTracks({
   ) {
     e.stopPropagation();
     e.preventDefault();
-    onSelectClip(clip.id);
+    // Ctrl/Cmd+클릭은 멀티 셀렉트 토글만 하고 드래그는 시작하지 않는다.
+    if (e.ctrlKey || e.metaKey) {
+      onSelectClip(clip.id, true);
+      return;
+    }
+    onSelectClip(clip.id, false);
+    beginInteraction(mode, track, clip, e);
+  }
 
+  function beginInteraction(
+    mode: InteractionMode,
+    track: PersistedTimelineTrack,
+    clip: PersistedTimelineClip,
+    e: React.MouseEvent,
+  ) {
     const sorted = [...track.clips].sort((a, b) => a.startMs - b.startMs);
     const idx = sorted.findIndex((c) => c.id === clip.id);
     const minMs = idx > 0 ? sorted[idx - 1].endMs : 0;
@@ -177,7 +193,7 @@ export function TimelineTracks({
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const ms = Math.max(0, Math.min((x / pxPerSec) * 1000, timeline.durationMs));
-    onSelectClip(null);
+    onSelectClip(null, false);
     onSeek(ms);
   }
 
@@ -226,26 +242,28 @@ export function TimelineTracks({
                 const left = (startMs / 1000) * pxPerSec;
                 const width = Math.max(((endMs - startMs) / 1000) * pxPerSec, 2);
                 const selected = selectedClipId === clip.id;
+                const multiSelected = multiSelectedIds.has(clip.id) && !selected;
                 return (
                   <div
                     key={clip.id}
                     title={clip.payload.label}
-                    onMouseDown={(e) => beginInteraction("move", track, clip, e)}
+                    onMouseDown={(e) => handleClipMouseDown("move", track, clip, e)}
                     className={cn(
                       "absolute top-1 h-6 cursor-grab overflow-hidden rounded-sm px-1 text-[10px] leading-6 text-black/80 active:cursor-grabbing",
                       TRACK_COLORS[track.type],
                       selected && "ring-2 ring-white",
+                      multiSelected && "ring-2 ring-sky-400",
                     )}
                     style={{ left, width }}
                   >
                     {width > 24 ? clip.payload.label : ""}
                     <div
-                      onMouseDown={(e) => beginInteraction("trim-start", track, clip, e)}
+                      onMouseDown={(e) => handleClipMouseDown("trim-start", track, clip, e)}
                       className="absolute inset-y-0 left-0 cursor-ew-resize"
                       style={{ width: TRIM_HANDLE_PX }}
                     />
                     <div
-                      onMouseDown={(e) => beginInteraction("trim-end", track, clip, e)}
+                      onMouseDown={(e) => handleClipMouseDown("trim-end", track, clip, e)}
                       className="absolute inset-y-0 right-0 cursor-ew-resize"
                       style={{ width: TRIM_HANDLE_PX }}
                     />

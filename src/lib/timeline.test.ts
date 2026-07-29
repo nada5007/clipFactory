@@ -10,8 +10,12 @@ import {
   computeImageRenderSegments,
   computeSplitTimes,
   computeTimelineStats,
+  insertBreathingGaps,
   planClipSync,
+  removeGapsBetweenSelectedClips,
+  removeGapsInClips,
   rewrapTextToMaxLineLength,
+  scaleClipsToTargetDuration,
   snapToGrid,
   validateTimeline,
 } from "@/lib/timeline";
@@ -318,5 +322,69 @@ describe("computeAudioRenderPlan", () => {
       1000,
     );
     expect(plan).toEqual([{ type: "clip", filePath: "a.mp3", offsetSec: 0, durationSec: 1, needsTrim: false }]);
+  });
+});
+
+describe("removeGapsInClips", () => {
+  it("모든 클립을 첫 클립 위치부터 빈틈없이 당겨 붙인다", () => {
+    const result = removeGapsInClips([
+      { id: "a", startMs: 500, endMs: 1000 },
+      { id: "b", startMs: 2000, endMs: 2500 },
+      { id: "c", startMs: 4000, endMs: 4200 },
+    ]);
+    expect(result).toEqual([
+      { id: "a", startMs: 500, endMs: 1000 },
+      { id: "b", startMs: 1000, endMs: 1500 },
+      { id: "c", startMs: 1500, endMs: 1700 },
+    ]);
+  });
+});
+
+describe("removeGapsBetweenSelectedClips", () => {
+  it("선택된 클립끼리만 첫 선택 클립 위치부터 당겨 붙인다", () => {
+    const clips = [
+      { id: "a", startMs: 0, endMs: 500 },
+      { id: "b", startMs: 1000, endMs: 1500 }, // 선택
+      { id: "c", startMs: 2000, endMs: 2200 }, // 선택
+    ];
+    const result = removeGapsBetweenSelectedClips(clips, new Set(["b", "c"]));
+    expect(result).toEqual([
+      { id: "b", startMs: 1000, endMs: 1500 },
+      { id: "c", startMs: 1500, endMs: 1700 },
+    ]);
+  });
+});
+
+describe("insertBreathingGaps", () => {
+  it("마지막 클립을 제외한 클립 뒤에 간격을 넣고 이후 클립을 누적으로 밀어낸다", () => {
+    const result = insertBreathingGaps(
+      [
+        { id: "a", startMs: 0, endMs: 1000 },
+        { id: "b", startMs: 1000, endMs: 2000 },
+        { id: "c", startMs: 2000, endMs: 2500 },
+      ],
+      300,
+    );
+    expect(result).toEqual([
+      { id: "a", startMs: 0, endMs: 1000 },
+      { id: "b", startMs: 1300, endMs: 2300 },
+      { id: "c", startMs: 2600, endMs: 3100 },
+    ]);
+  });
+});
+
+describe("scaleClipsToTargetDuration", () => {
+  it("전체 구간을 목표 길이에 맞춰 원점 기준으로 비례 스케일한다", () => {
+    const result = scaleClipsToTargetDuration(
+      [
+        { id: "a", startMs: 0, endMs: 1000 },
+        { id: "b", startMs: 1000, endMs: 2000 },
+      ],
+      4000,
+    );
+    expect(result).toEqual([
+      { id: "a", startMs: 0, endMs: 2000 },
+      { id: "b", startMs: 2000, endMs: 4000 },
+    ]);
   });
 });
