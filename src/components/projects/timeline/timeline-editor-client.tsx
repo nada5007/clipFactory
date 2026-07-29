@@ -22,7 +22,7 @@ import {
   type TimelineValidationResult,
 } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
-import type { SerializedProject, SerializedVideoAsset } from "@/types/project";
+import type { BgmSettings, EffectiveBgmSettings, SerializedProject, SerializedVideoAsset } from "@/types/project";
 
 type LeftTab = "script" | "subtitle" | "preview" | "final";
 
@@ -94,6 +94,92 @@ function findClip(timeline: PersistedTimeline | null, clipId: string | null) {
   return null;
 }
 
+function formatClipTimecode(ms: number): string {
+  const totalSec = ms / 1000;
+  const m = Math.floor(totalSec / 60);
+  const s = (totalSec % 60).toFixed(1).padStart(4, "0");
+  return `${String(m).padStart(2, "0")}:${s}`;
+}
+
+// 자막 탭 세그먼트 카드: 재생 중 현재 위치의 카드로 자동 스크롤 + 하이라이트되며,
+// 텍스트는 카드별 로컬 draft로 편집 후 저장(다른 카드 편집과 서로 간섭하지 않도록).
+function SubtitleCard({
+  index,
+  clip,
+  isSelected,
+  isActive,
+  onSelect,
+  onSave,
+}: {
+  index: number;
+  clip: PersistedTimelineClip;
+  isSelected: boolean;
+  isActive: boolean;
+  onSelect: () => void;
+  onSave: (text: string) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState(clip.payload.text ?? "");
+  const [saving, setSaving] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setDraft(clip.payload.text ?? "");
+  }, [clip.id, clip.payload.text]);
+
+  useEffect(() => {
+    if (isActive) cardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [isActive]);
+
+  const dirty = draft !== (clip.payload.text ?? "");
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await onSave(draft);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      ref={cardRef}
+      onClick={onSelect}
+      className={cn(
+        "cursor-pointer rounded-md border p-3 text-sm",
+        isActive ? "border-sky-400 bg-sky-400/10" : isSelected ? "border-primary/60 bg-white/5" : "border-white/10 bg-white/5",
+      )}
+    >
+      <div className="mb-1 flex items-center gap-2 text-xs text-white/40">
+        <span>#{index + 1}</span>
+        <span>
+          {formatClipTimecode(clip.startMs)} – {formatClipTimecode(clip.endMs)}
+        </span>
+        {isActive && <span className="font-medium text-sky-400">재생중</span>}
+      </div>
+      <Textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onClick={(e) => e.stopPropagation()}
+        className="min-h-14 border-white/20 bg-white/5 text-white"
+      />
+      {dirty && (
+        <Button
+          size="sm"
+          className="mt-1.5"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleSave();
+          }}
+          disabled={saving}
+        >
+          {saving ? "저장 중..." : "저장"}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const [project, setProject] = useState<SerializedProject | null>(null);
   const [video, setVideo] = useState<SerializedVideoAsset | null>(null);
@@ -119,6 +205,13 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const [savingText, setSavingText] = useState(false);
   const [history, setHistory] = useState<TimingSnapshot[]>([]);
   const [future, setFuture] = useState<TimingSnapshot[]>([]);
+
+  // 실제 재생 엔진: TTS 클립을 순서대로 이어 재생하고 BGM을 동시에 재생한다.
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [bgmSettings, setBgmSettings] = useState<BgmSettings | null>(null);
+  const ttsAudioRef = useRef<HTMLAudioElement>(null);
+  const bgmAudioRef = useRef<HTMLAudioElement>(null);
+  const currentTtsClipIdRef = useRef<string | null>(null);
 
   const [rightPanelWidth, setRightPanelWidth] = useState(RIGHT_PANEL_DEFAULT_WIDTH);
   const draggingRef = useRef(false);
@@ -154,15 +247,18 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [projectRes, videoRes, timelineRes] = await Promise.all([
+      const [projectRes, videoRes, timelineRes, bgmRes] = await Promise.all([
         fetch(`/api/projects/${projectId}`),
         fetch(`/api/projects/${projectId}/render`),
         fetch(`/api/projects/${projectId}/timeline`),
+        fetch(`/api/projects/${projectId}/bgm-settings/effective`),
       ]);
 
       setProject(projectRes.ok ? await projectRes.json() : null);
       setVideo(videoRes.ok ? await videoRes.json() : null);
       setTimeline(timelineRes.ok ? await timelineRes.json() : null);
+      const bgmEffective: EffectiveBgmSettings = bgmRes.ok ? await bgmRes.json() : { settings: null, scope: null };
+      setBgmSettings(bgmEffective.settings);
     } finally {
       setLoading(false);
     }
@@ -210,6 +306,124 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   useEffect(() => {
     setTextDraft(selected?.clip.payload.text ?? "");
   }, [selected?.clip.id, selected?.clip.payload.text]);
+
+  // BGM 오디오 엘리먼트는 설정이 바뀔 때만 src/재생 파라미터를 갱신하고, 재생 시작/탐색은
+  // playBgmFrom에서 currentTime만 조정한다(재생 중 트랙 전환 때마다 다시 로드하지 않기 위함).
+  useEffect(() => {
+    const audio = bgmAudioRef.current;
+    if (!audio || !bgmSettings) return;
+    audio.src = `/api/bgm/${bgmSettings.trackId}/file`;
+    audio.loop = bgmSettings.loop;
+    audio.volume = Math.min(1, Math.max(0, 10 ** (bgmSettings.volumeDb / 20)));
+    audio.playbackRate = bgmSettings.playbackSpeed;
+  }, [bgmSettings]);
+
+  function getTrackClips(type: PersistedTimeline["tracks"][number]["type"]) {
+    return timeline?.tracks.find((t) => t.type === type)?.clips ?? [];
+  }
+
+  function findClipAtMs(clips: PersistedTimelineClip[], ms: number) {
+    return clips.find((c) => ms >= c.startMs && ms < c.endMs) ?? null;
+  }
+
+  const activeSubtitleClip = isPlaying ? findClipAtMs(getTrackClips("SUBTITLE"), playheadMs) : null;
+
+  function playTtsFrom(atMs: number) {
+    const ttsClips = getTrackClips("TTS");
+    const clip = findClipAtMs(ttsClips, atMs) ?? ttsClips.find((c) => c.startMs >= atMs) ?? null;
+    const audio = ttsAudioRef.current;
+    if (!clip || !audio || !clip.payload.sourceId) {
+      stopPlayback();
+      return;
+    }
+    if (currentTtsClipIdRef.current !== clip.id) {
+      currentTtsClipIdRef.current = clip.id;
+      audio.src = `/api/projects/${projectId}/tts/${clip.payload.sourceId}/audio`;
+    }
+    audio.currentTime = Math.max(0, (atMs - clip.startMs) / 1000);
+    audio.play().catch(() => {});
+  }
+
+  function playBgmFrom(atMs: number) {
+    const audio = bgmAudioRef.current;
+    if (!audio || !bgmSettings) return;
+    if (Number.isFinite(audio.duration) && audio.duration > 0) {
+      audio.currentTime = (atMs / 1000) % audio.duration;
+    }
+    audio.play().catch(() => {});
+  }
+
+  function stopPlayback() {
+    ttsAudioRef.current?.pause();
+    bgmAudioRef.current?.pause();
+    setIsPlaying(false);
+  }
+
+  function togglePlay() {
+    if (isPlaying) {
+      stopPlayback();
+      return;
+    }
+    setIsPlaying(true);
+    playTtsFrom(playheadMs);
+    playBgmFrom(playheadMs);
+  }
+
+  function seekTo(ms: number) {
+    const clamped = Math.max(0, Math.min(ms, timeline?.durationMs ?? 0));
+    setPlayheadMs(clamped);
+    if (isPlaying) {
+      playTtsFrom(clamped);
+      playBgmFrom(clamped);
+    }
+  }
+
+  function handleTtsTimeUpdate() {
+    const audio = ttsAudioRef.current;
+    const clipId = currentTtsClipIdRef.current;
+    if (!audio || !clipId) return;
+    const clip = getTrackClips("TTS").find((c) => c.id === clipId);
+    if (!clip) return;
+    setPlayheadMs(clip.startMs + audio.currentTime * 1000);
+  }
+
+  function handleTtsEnded() {
+    const ttsClips = getTrackClips("TTS");
+    const idx = ttsClips.findIndex((c) => c.id === currentTtsClipIdRef.current);
+    const next = ttsClips[idx + 1];
+    if (next) {
+      playTtsFrom(next.startMs);
+    } else {
+      stopPlayback();
+      setPlayheadMs(timeline?.durationMs ?? 0);
+    }
+  }
+
+  // Space/Home/End 재생 단축키 — 텍스트 입력 중에는 무시하고, 아래 함수들은 매 렌더마다 새로 만들어지므로
+  // ref에 최신 버전을 담아 마운트 시 한 번만 등록한 리스너에서 항상 최신 함수를 참조하게 한다.
+  const playbackShortcutsRef = useRef({ togglePlay, seekTo, durationMs: timeline?.durationMs ?? 0 });
+  playbackShortcutsRef.current = { togglePlay, seekTo, durationMs: timeline?.durationMs ?? 0 };
+
+  useEffect(() => {
+    function handlePlaybackKeys(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      const isTyping = !!target && ["INPUT", "TEXTAREA"].includes(target.tagName);
+      if (isTyping) return;
+      const { togglePlay: play, seekTo: seek, durationMs } = playbackShortcutsRef.current;
+      if (e.code === "Space") {
+        e.preventDefault();
+        play();
+      } else if (e.code === "Home") {
+        e.preventDefault();
+        seek(0);
+      } else if (e.code === "End") {
+        e.preventDefault();
+        seek(durationMs);
+      }
+    }
+    window.addEventListener("keydown", handlePlaybackKeys);
+    return () => window.removeEventListener("keydown", handlePlaybackKeys);
+  }, []);
 
   function handleValidate() {
     if (timeline) setValidation(validateTimeline(timeline));
@@ -452,7 +666,21 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
 
       {/* 상단 툴바 2행 (재생 컨트롤) */}
       <div className="flex items-center gap-3 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
-        <span className="text-white/30">|◀ ▶ ▶|</span>
+        <div className="flex items-center gap-2 text-sm">
+          <button onClick={() => seekTo(0)} className="text-white/60 hover:text-white" title="처음으로 (Home)">
+            |◀
+          </button>
+          <button onClick={togglePlay} className="text-white hover:text-white/80" title="재생/일시정지 (Space)">
+            {isPlaying ? "⏸" : "▶"}
+          </button>
+          <button
+            onClick={() => seekTo(timeline.durationMs)}
+            className="text-white/60 hover:text-white"
+            title="끝으로 (End)"
+          >
+            ▶|
+          </button>
+        </div>
         <div className="flex items-center gap-1.5">
           <span>속도</span>
           <Slider
@@ -495,9 +723,38 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
             </div>
           )}
           {activeTab === "subtitle" && (
-            <div className="flex h-full items-center justify-center text-sm text-white/40">
-              자막 탭은 다음 라운드(Phase C)에서 지원 예정입니다. 자막 클립은 아래 타임라인에서 선택해 우측
-              속성 패널에서 편집할 수 있습니다.
+            <div className="space-y-2">
+              {subtitleClips.length === 0 ? (
+                <p className="py-8 text-center text-sm text-white/40">자막이 없습니다.</p>
+              ) : (
+                subtitleClips.map((clip, i) => (
+                  <SubtitleCard
+                    key={clip.id}
+                    index={i}
+                    clip={clip}
+                    isSelected={selectedClipId === clip.id}
+                    isActive={activeSubtitleClip?.id === clip.id}
+                    onSelect={() => {
+                      setSelectedClipId(clip.id);
+                      seekTo(clip.startMs);
+                    }}
+                    onSave={async (text) => {
+                      const res = await fetch(`/api/projects/${projectId}/timeline/clips/${clip.id}`, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ text }),
+                      });
+                      if (res.ok) {
+                        const updated = await res.json();
+                        setTimeline((prev) =>
+                          prev ? patchClipInTimeline(prev, clip.id, { payload: updated.payload }) : prev,
+                        );
+                      }
+                    }}
+                  />
+                ))
+              )}
+              <p className="pt-2 text-center text-xs text-white/30">총 {subtitleClips.length}개 자막</p>
             </div>
           )}
           {activeTab === "preview" && (
@@ -737,9 +994,14 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
         snapEnabled={snapEnabled}
         snapIntervalMs={snapIntervalMs}
         onSelectClip={setSelectedClipId}
-        onSeek={setPlayheadMs}
+        onSeek={seekTo}
         onCommitTiming={commitClipTiming}
       />
+
+      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+      <audio ref={ttsAudioRef} onTimeUpdate={handleTtsTimeUpdate} onEnded={handleTtsEnded} className="hidden" />
+      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+      <audio ref={bgmAudioRef} className="hidden" />
     </div>
   );
 }
