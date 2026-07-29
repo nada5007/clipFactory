@@ -13,6 +13,10 @@ const envSchema = z.object({
   YOUTUBE_API_KEY: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
+  // 자막 번인(ASS/drawtext)에는 libass가 포함된 ffmpeg-full 빌드가 필요하다.
+  // 기본 ffmpeg 포뮬러에는 libass가 없어 별도 경로를 지정하지 않으면 PATH의 ffmpeg/ffprobe를 그대로 쓴다.
+  FFMPEG_PATH: z.string().optional(),
+  FFPROBE_PATH: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

@@ -24,9 +24,159 @@ export type TimelineData = {
   durationMs: number;
 };
 
+// 자막 클립 스타일 — UI_SPEC.md §5.2 "자막 클립 > 스타일" 탭. 값이 없는 필드는 DEFAULT_SUBTITLE_STYLE로 대체된다.
+export type SubtitleStyle = {
+  fontFamily: string;
+  fontSizePx: number;
+  fontColor: string; // #RRGGBB
+  bold: boolean;
+  backgroundColor: string; // #RRGGBB
+  backgroundOpacity: number; // 0~1
+  positionXPx: number;
+  positionYPx: number;
+  borderWidthPx: number;
+  borderColor: string; // #RRGGBB
+  maxLineLength: number;
+};
+
+export const DEFAULT_SUBTITLE_STYLE_BASE: Omit<SubtitleStyle, "positionXPx" | "positionYPx"> = {
+  fontFamily: "Nanum Gothic",
+  fontSizePx: 75,
+  fontColor: "#FFFFFF",
+  bold: true,
+  backgroundColor: "#000000",
+  backgroundOpacity: 0.5,
+  borderWidthPx: 2,
+  borderColor: "#000000",
+  maxLineLength: 25,
+};
+
+// 위치 기본값은 해상도 대비 상대값(가로 중앙, 세로 하단 쪽)이라 영상 포맷(SHORT/LONG)에 따라 달라진다.
+export function resolveSubtitleStyle(
+  partial: Partial<SubtitleStyle> | null | undefined,
+  videoWidth: number,
+  videoHeight: number,
+): SubtitleStyle {
+  const defaultPosition = { positionXPx: Math.round(videoWidth / 2), positionYPx: Math.round(videoHeight * 0.85) };
+  return { ...DEFAULT_SUBTITLE_STYLE_BASE, ...defaultPosition, ...(partial ?? {}) };
+}
+
+// 비디오 클립 속성 — UI_SPEC.md §5.2 "비디오 클립" 서브탭. VIDEO 트랙은 아직 업로드 기능이 없어
+// 실제로 선택 가능한 클립이 없지만, 속성 패널 UI/데이터 구조는 미리 구현해둔다(§1.3 6번 완료 후 연결).
+export type VideoClipTransform = {
+  x: number; // -1~2 정규화 좌표
+  y: number;
+  scale: number;
+  rotationDeg: number;
+  opacity: number; // 0~1
+  flipH: boolean;
+};
+
+export const DEFAULT_VIDEO_TRANSFORM: VideoClipTransform = {
+  x: 0.5,
+  y: 0.5,
+  scale: 1,
+  rotationDeg: 0,
+  opacity: 1,
+  flipH: false,
+};
+
+export type VideoClipEffects = {
+  colorPreset: string; // "none" | 프리셋 키
+  brightness: number; // -1~1
+  contrast: number;
+  saturation: number;
+  temperature: number;
+};
+
+export const DEFAULT_VIDEO_EFFECTS: VideoClipEffects = {
+  colorPreset: "none",
+  brightness: 0,
+  contrast: 0,
+  saturation: 0,
+  temperature: 0,
+};
+
+export const COLOR_PRESETS = [
+  { key: "none", label: "없음" },
+  { key: "cinematic", label: "시네마틱" },
+  { key: "neo-noir", label: "네오 느와르" },
+  { key: "blue-steel", label: "블루 스틸" },
+  { key: "golden-hour", label: "골든 아워" },
+  { key: "retro-film", label: "레트로 필름" },
+  { key: "sepia", label: "세피아" },
+  { key: "faded", label: "페이디드" },
+  { key: "polaroid", label: "폴라로이드" },
+  { key: "vivid", label: "비비드" },
+  { key: "hdr", label: "HDR 느낌" },
+  { key: "pop-color", label: "팝 컬러" },
+  { key: "warm", label: "따뜻한 톤" },
+  { key: "cool", label: "차가운 톤" },
+  { key: "golden-tone", label: "황금 톤" },
+  { key: "bw-classic", label: "B&W 클래식" },
+  { key: "bw-high-contrast", label: "B&W 하이콘트라스트" },
+  { key: "film-noir", label: "필름 누아르" },
+  { key: "soft-bw", label: "소프트 B&W" },
+  { key: "dreamy", label: "몽환적" },
+] as const;
+
+export type TransitionType =
+  | "none"
+  | "fade"
+  | "cut"
+  | "slide-left"
+  | "slide-right"
+  | "slide-up"
+  | "slide-down"
+  | "wipe-left"
+  | "wipe-right"
+  | "wipe-up"
+  | "wipe-down"
+  | "diagonal-tl"
+  | "diagonal-br"
+  | "fade-black"
+  | "fade-white";
+
+export type VideoClipTransition = { type: TransitionType; durationMs: number };
+export const DEFAULT_VIDEO_TRANSITION: VideoClipTransition = { type: "fade", durationMs: 1000 };
+
+export type VideoClipOptions = { speed: number; flipH: boolean };
+export const DEFAULT_VIDEO_OPTIONS: VideoClipOptions = { speed: 1, flipH: false };
+
+export type VideoClipMask = {
+  shape: "rect" | "ellipse";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotationDeg: number;
+  featherPx: number;
+  roundnessPct: number;
+  inverted: boolean;
+} | null;
+
+export type KeyframeProperty = "positionX" | "positionY" | "scale" | "rotation";
+export type Keyframe = { atMs: number; value: number };
+export type VideoClipKeyframes = Partial<Record<KeyframeProperty, Keyframe[]>>;
+
 // Phase B: GET/PATCH /api/projects/:id/timeline이 실제로 주고받는(영속화된) 클립 형태.
 // 위 TimelineClip(Phase A "desired" 계산 결과)과 이름이 겹치지 않도록 Persisted 접두사를 붙인다.
-export type PersistedClipPayload = { sourceId?: string; label: string; text?: string };
+export type PersistedClipPayload = {
+  sourceId?: string;
+  label: string;
+  text?: string;
+  // TTS 클립 전용: 트림(트림-시작)으로 잘려나간 만큼 원본 오디오 소스에서 건너뛸 시작 오프셋(ms).
+  sourceOffsetMs?: number;
+  // 자막 클립 전용
+  style?: Partial<SubtitleStyle>;
+  // 비디오 클립 전용(현재는 VIDEO 트랙에 클립이 없어 미사용 — §1.3 6번 완료 후 연결)
+  transform?: Partial<VideoClipTransform>;
+  effects?: Partial<VideoClipEffects>;
+  transition?: Partial<VideoClipTransition>;
+  videoOptions?: Partial<VideoClipOptions>;
+  mask?: VideoClipMask;
+  keyframes?: VideoClipKeyframes;
+};
 
 export type PersistedTimelineClip = {
   id: string;
@@ -313,4 +463,64 @@ export function rewrapTextToMaxLineLength(text: string, maxChars = RECOMMENDED_S
     .split("\n")
     .map((line) => wrapLine(line, maxChars))
     .join("\n");
+}
+
+// ── 렌더링: 편집(드래그/트림/삭제)으로 생긴 빈 구간을 실제 출력에서 어떻게 메울지 계산한다 ──────
+
+export type ImageRenderSegment = { imagePath: string; durationSec: number };
+
+// 이미지 클립 사이·앞뒤로 생긴 빈 구간은 "바로 앞 이미지가 계속 보이는" 방식으로 채운다(정지 이미지라
+// 자연스럽게 이어 보임). 각 클립의 끝 시각(endMs)은 그대로 존중하고, 시작 지점만 커서 기준으로 당겨쓴다.
+export function computeImageRenderSegments(
+  clips: { startMs: number; endMs: number; imagePath: string }[],
+  timelineDurationMs: number,
+): ImageRenderSegment[] {
+  const sorted = [...clips].sort((a, b) => a.startMs - b.startMs);
+  const segments: ImageRenderSegment[] = [];
+  let cursor = 0;
+  sorted.forEach((clip, i) => {
+    const next = sorted[i + 1];
+    // 다음 클립(또는 타임라인 끝)이 이 클립의 endMs보다 뒤에서 시작하면 그 간격만큼 이 클립을 늘려 채운다.
+    const effectiveEnd = Math.max(clip.endMs, next ? next.startMs : timelineDurationMs);
+    segments.push({ imagePath: clip.imagePath, durationSec: Math.max(0, (effectiveEnd - cursor) / 1000) });
+    cursor = effectiveEnd;
+  });
+  return segments;
+}
+
+export type AudioRenderSegment =
+  | { type: "silence"; durationSec: number }
+  | { type: "clip"; filePath: string; offsetSec: number; durationSec: number; needsTrim: boolean };
+
+// TTS 클립 사이·앞뒤로 생긴 빈 구간(트림/삭제로 발생)은 무음으로 채워서, 최종 오디오 길이가 항상
+// timelineDurationMs와 정확히 일치하도록 한다(합성 시 -shortest로 잘려나가는 것을 방지).
+export function computeAudioRenderPlan(
+  clips: { startMs: number; endMs: number; filePath: string; sourceOffsetMs: number; naturalDurationMs: number }[],
+  timelineDurationMs: number,
+): AudioRenderSegment[] {
+  const sorted = [...clips].sort((a, b) => a.startMs - b.startMs);
+  const segments: AudioRenderSegment[] = [];
+  let cursor = 0;
+
+  for (const clip of sorted) {
+    if (clip.startMs > cursor) {
+      segments.push({ type: "silence", durationSec: (clip.startMs - cursor) / 1000 });
+    }
+    const durationMs = clip.endMs - clip.startMs;
+    const needsTrim = clip.sourceOffsetMs !== 0 || durationMs !== clip.naturalDurationMs;
+    segments.push({
+      type: "clip",
+      filePath: clip.filePath,
+      offsetSec: clip.sourceOffsetMs / 1000,
+      durationSec: durationMs / 1000,
+      needsTrim,
+    });
+    cursor = clip.endMs;
+  }
+
+  if (cursor < timelineDurationMs) {
+    segments.push({ type: "silence", durationSec: (timelineDurationMs - cursor) / 1000 });
+  }
+
+  return segments;
 }

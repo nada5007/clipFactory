@@ -3,7 +3,14 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildImageSlideshow, concatAudioFiles, muxVideoAudio } from "@/lib/ffmpeg";
+import {
+  buildImageSlideshow,
+  burnSubtitles,
+  concatAudioFiles,
+  generateSilence,
+  muxVideoAudio,
+  trimOrPadAudioToDuration,
+} from "@/lib/ffmpeg";
 import { prisma } from "@/lib/prisma";
 import { renderVideo } from "@/server/services/video.service";
 
@@ -11,6 +18,9 @@ vi.mock("@/lib/ffmpeg", () => ({
   concatAudioFiles: vi.fn().mockResolvedValue(undefined),
   buildImageSlideshow: vi.fn().mockResolvedValue(undefined),
   muxVideoAudio: vi.fn().mockResolvedValue(undefined),
+  generateSilence: vi.fn().mockResolvedValue(undefined),
+  trimOrPadAudioToDuration: vi.fn().mockResolvedValue(undefined),
+  burnSubtitles: vi.fn().mockResolvedValue(undefined),
 }));
 
 async function createProjectWithAssets(options: { audio: boolean; images: boolean }) {
@@ -67,6 +77,7 @@ async function createProjectWithAssets(options: { audio: boolean; images: boolea
 }
 
 async function cleanup(projectId: string, channelId: string) {
+  await prisma.timeline.deleteMany({ where: { projectId } });
   await prisma.videoAsset.deleteMany({ where: { projectId } });
   await prisma.imageAsset.deleteMany({ where: { projectId } });
   await prisma.audioSegment.deleteMany({ where: { projectId } });
@@ -80,6 +91,9 @@ describe("renderVideo", () => {
     vi.mocked(concatAudioFiles).mockClear();
     vi.mocked(buildImageSlideshow).mockClear();
     vi.mocked(muxVideoAudio).mockClear();
+    vi.mocked(generateSilence).mockClear();
+    vi.mocked(trimOrPadAudioToDuration).mockClear();
+    vi.mocked(burnSubtitles).mockClear();
   });
 
   it("성공 시 VideoAsset을 생성하고 Project.status/progress를 갱신한다", async () => {
@@ -93,9 +107,13 @@ describe("renderVideo", () => {
       expect(video.filePath).toBe("video.mp4");
       expect(video.subtitlePath).toBe("subtitles.srt");
 
+      // 두 TTS 세그먼트가 빈틈없이 이어져 있어(0~1000, 1000~2500) 트림/무음 없이 그대로 이어붙는다.
       expect(concatAudioFiles).toHaveBeenCalledTimes(1);
+      expect(generateSilence).not.toHaveBeenCalled();
+      expect(trimOrPadAudioToDuration).not.toHaveBeenCalled();
       expect(buildImageSlideshow).toHaveBeenCalledTimes(1);
       expect(muxVideoAudio).toHaveBeenCalledTimes(1);
+      expect(burnSubtitles).toHaveBeenCalledTimes(1);
 
       const updated = await prisma.project.findUniqueOrThrow({ where: { id: project.id } });
       expect(updated.status).toBe("RENDERED");
@@ -155,6 +173,36 @@ describe("renderVideo", () => {
       const updated = await prisma.project.findUniqueOrThrow({ where: { id: project.id } });
       expect(updated.status).toBe("FAILED");
       expect(updated.errorMessage).toBe("ffmpeg 실패");
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("트림으로 클립 사이에 빈 구간이 생기면 무음을 삽입한다", async () => {
+    const { channel, project } = await createProjectWithAssets({ audio: true, images: true });
+    try {
+      // 최초 진입으로 Timeline 자동 생성 후, 두 번째 TTS 클립을 뒤로 트림해 빈 구간을 만든다.
+      await renderVideo(project.id).catch(() => undefined); // Timeline 생성 목적, 실패해도 무방
+      vi.mocked(concatAudioFiles).mockClear();
+      vi.mocked(muxVideoAudio).mockClear();
+      vi.mocked(buildImageSlideshow).mockClear();
+      vi.mocked(burnSubtitles).mockClear();
+
+      const timeline = await prisma.timeline.findUniqueOrThrow({ where: { projectId: project.id } });
+      const ttsTrack = await prisma.timelineTrack.findFirstOrThrow({
+        where: { timelineId: timeline.id, type: "TTS" },
+        include: { clips: { orderBy: { startMs: "asc" } } },
+      });
+      const secondClip = ttsTrack.clips[1];
+      await prisma.timelineClip.update({
+        where: { id: secondClip.id },
+        data: { startMs: 1500 }, // 1000~1500 사이에 빈 구간 발생 (원본 세그먼트 endMs=2500 그대로 유지)
+      });
+
+      await renderVideo(project.id);
+
+      expect(generateSilence).toHaveBeenCalledTimes(1);
+      expect(generateSilence).toHaveBeenCalledWith(0.5, expect.any(String));
     } finally {
       await cleanup(project.id, channel.id);
     }

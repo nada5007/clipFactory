@@ -10,6 +10,7 @@ import { Progress } from "@/components/ui/progress";
 import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import { ScriptPanel } from "@/components/projects/detail/script-panel";
+import { ClipPropertiesPanel } from "@/components/projects/timeline/clip-properties-panel";
 import { TimelineTracks } from "@/components/projects/timeline/timeline-tracks";
 import { useJobProgress } from "@/hooks/use-job-progress";
 import {
@@ -22,6 +23,7 @@ import {
   type TimelineValidationResult,
 } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
+import { resolveVideoResolution } from "@/lib/video";
 import type { BgmSettings, EffectiveBgmSettings, SerializedProject, SerializedVideoAsset } from "@/types/project";
 
 type LeftTab = "script" | "subtitle" | "preview" | "final";
@@ -361,6 +363,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     }
   }
 
+  const videoResolution = resolveVideoResolution(project?.videoFormat ?? "SHORT");
   const stats = useMemo(() => (timeline ? computeTimelineStats(timeline) : null), [timeline]);
 
   const subtitleClips = useMemo(
@@ -924,7 +927,21 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
 
           <div className="space-y-3 rounded-md border border-white/10 p-3">
             <p className="font-medium">속성</p>
-            {selected ? (
+            {selected && (selected.track.type === "SUBTITLE" || selected.track.type === "VIDEO") ? (
+              <ClipPropertiesPanel
+                projectId={projectId}
+                clip={selected.clip}
+                track={selected.track}
+                videoWidth={videoResolution.width}
+                videoHeight={videoResolution.height}
+                canSplit={canSplit}
+                onSplit={handleSplit}
+                onDelete={handleDeleteClip}
+                onCommitTiming={commitClipTiming}
+                onPatched={(payload) => setTimeline((prev) => (prev ? patchClipInTimeline(prev, selected.clip.id, { payload }) : prev))}
+                onRefetchAll={fetchAll}
+              />
+            ) : selected ? (
               <div className="space-y-2">
                 <p className="text-white/50">{selected.track.name} 클립</p>
                 <div className="grid grid-cols-2 gap-2">

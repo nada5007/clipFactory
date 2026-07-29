@@ -6,6 +6,8 @@ import {
   clampClipTiming,
   clampTrimEnd,
   clampTrimStart,
+  computeAudioRenderPlan,
+  computeImageRenderSegments,
   computeSplitTimes,
   computeTimelineStats,
   planClipSync,
@@ -260,5 +262,61 @@ describe("rewrapTextToMaxLineLength", () => {
 
   it("이미 기준 이내면 그대로 둔다", () => {
     expect(rewrapTextToMaxLineLength("짧은 자막", 14)).toBe("짧은 자막");
+  });
+});
+
+describe("computeImageRenderSegments", () => {
+  it("클립 사이 빈 구간은 앞 이미지가 계속 보이도록 채운다", () => {
+    const segments = computeImageRenderSegments(
+      [
+        { startMs: 0, endMs: 1000, imagePath: "a.png" },
+        { startMs: 1500, endMs: 3000, imagePath: "b.png" }, // 1000~1500 트림으로 생긴 빈 구간
+      ],
+      3000,
+    );
+    expect(segments).toEqual([
+      { imagePath: "a.png", durationSec: 1.5 }, // 원래 1초 + 빈 구간 0.5초를 흡수
+      { imagePath: "b.png", durationSec: 1.5 },
+    ]);
+  });
+
+  it("마지막 클립은 타임라인 전체 길이까지 늘어난다", () => {
+    const segments = computeImageRenderSegments([{ startMs: 0, endMs: 2000, imagePath: "a.png" }], 3000);
+    expect(segments).toEqual([{ imagePath: "a.png", durationSec: 3 }]);
+  });
+});
+
+describe("computeAudioRenderPlan", () => {
+  it("트림/삭제로 생긴 빈 구간에 무음을 삽입해 전체 길이를 맞춘다", () => {
+    const plan = computeAudioRenderPlan(
+      [
+        { startMs: 500, endMs: 1500, filePath: "a.mp3", sourceOffsetMs: 0, naturalDurationMs: 1000 },
+        { startMs: 2000, endMs: 2500, filePath: "b.mp3", sourceOffsetMs: 0, naturalDurationMs: 500 },
+      ],
+      3000,
+    );
+    expect(plan).toEqual([
+      { type: "silence", durationSec: 0.5 }, // 0~500 선행 공백
+      { type: "clip", filePath: "a.mp3", offsetSec: 0, durationSec: 1, needsTrim: false },
+      { type: "silence", durationSec: 0.5 }, // 1500~2000
+      { type: "clip", filePath: "b.mp3", offsetSec: 0, durationSec: 0.5, needsTrim: false },
+      { type: "silence", durationSec: 0.5 }, // 2500~3000 후행 공백
+    ]);
+  });
+
+  it("트림으로 원본과 길이/오프셋이 달라지면 needsTrim을 표시한다", () => {
+    const plan = computeAudioRenderPlan(
+      [{ startMs: 0, endMs: 800, filePath: "a.mp3", sourceOffsetMs: 200, naturalDurationMs: 1000 }],
+      800,
+    );
+    expect(plan).toEqual([{ type: "clip", filePath: "a.mp3", offsetSec: 0.2, durationSec: 0.8, needsTrim: true }]);
+  });
+
+  it("빈 구간이 없으면 무음 없이 클립만 이어진다", () => {
+    const plan = computeAudioRenderPlan(
+      [{ startMs: 0, endMs: 1000, filePath: "a.mp3", sourceOffsetMs: 0, naturalDurationMs: 1000 }],
+      1000,
+    );
+    expect(plan).toEqual([{ type: "clip", filePath: "a.mp3", offsetSec: 0, durationSec: 1, needsTrim: false }]);
   });
 });

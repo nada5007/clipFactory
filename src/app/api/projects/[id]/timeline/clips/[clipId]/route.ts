@@ -1,12 +1,93 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { deleteClip, updateClipText, updateClipTiming } from "@/server/services/timeline.service";
+import {
+  deleteClip,
+  updateClipStyle,
+  updateClipText,
+  updateClipTiming,
+  updateClipVideoProps,
+} from "@/server/services/timeline.service";
+
+const subtitleStyleSchema = z
+  .object({
+    fontFamily: z.string(),
+    fontSizePx: z.number(),
+    fontColor: z.string(),
+    bold: z.boolean(),
+    backgroundColor: z.string(),
+    backgroundOpacity: z.number().min(0).max(1),
+    positionXPx: z.number(),
+    positionYPx: z.number(),
+    borderWidthPx: z.number(),
+    borderColor: z.string(),
+    maxLineLength: z.number(),
+  })
+  .partial();
+
+const transformSchema = z
+  .object({ x: z.number(), y: z.number(), scale: z.number(), rotationDeg: z.number(), opacity: z.number(), flipH: z.boolean() })
+  .partial();
+
+const effectsSchema = z
+  .object({ colorPreset: z.string(), brightness: z.number(), contrast: z.number(), saturation: z.number(), temperature: z.number() })
+  .partial();
+
+const transitionSchema = z
+  .object({
+    type: z.enum([
+      "none",
+      "fade",
+      "cut",
+      "slide-left",
+      "slide-right",
+      "slide-up",
+      "slide-down",
+      "wipe-left",
+      "wipe-right",
+      "wipe-up",
+      "wipe-down",
+      "diagonal-tl",
+      "diagonal-br",
+      "fade-black",
+      "fade-white",
+    ]),
+    durationMs: z.number(),
+  })
+  .partial();
+
+const videoOptionsSchema = z.object({ speed: z.number(), flipH: z.boolean() }).partial();
+
+const maskSchema = z
+  .object({
+    shape: z.enum(["rect", "ellipse"]),
+    x: z.number(),
+    y: z.number(),
+    width: z.number(),
+    height: z.number(),
+    rotationDeg: z.number(),
+    featherPx: z.number(),
+    roundnessPct: z.number(),
+    inverted: z.boolean(),
+  })
+  .nullable();
+
+const keyframeSchema = z.array(z.object({ atMs: z.number(), value: z.number() }));
+const keyframesSchema = z
+  .object({ positionX: keyframeSchema, positionY: keyframeSchema, scale: keyframeSchema, rotation: keyframeSchema })
+  .partial();
 
 const patchSchema = z.object({
   startMs: z.number().int().min(0).optional(),
   endMs: z.number().int().min(0).optional(),
   text: z.string().optional(),
+  style: subtitleStyleSchema.optional(),
+  transform: transformSchema.optional(),
+  effects: effectsSchema.optional(),
+  transition: transitionSchema.optional(),
+  videoOptions: videoOptionsSchema.optional(),
+  mask: maskSchema.optional(),
+  keyframes: keyframesSchema.optional(),
 });
 
 export async function PATCH(
@@ -17,17 +98,31 @@ export async function PATCH(
   if (!body.success) {
     return NextResponse.json({ error: body.error.flatten() }, { status: 400 });
   }
-  if (body.data.startMs === undefined && body.data.endMs === undefined && body.data.text === undefined) {
+  const { startMs, endMs, text, style, transform, effects, transition, videoOptions, mask, keyframes } = body.data;
+  const hasVideoProps =
+    transform !== undefined ||
+    effects !== undefined ||
+    transition !== undefined ||
+    videoOptions !== undefined ||
+    mask !== undefined ||
+    keyframes !== undefined;
+  if (startMs === undefined && endMs === undefined && text === undefined && style === undefined && !hasVideoProps) {
     return NextResponse.json({ error: "변경할 값이 없습니다." }, { status: 400 });
   }
 
   try {
     let clip;
-    if (body.data.startMs !== undefined && body.data.endMs !== undefined) {
-      clip = await updateClipTiming(params.clipId, { startMs: body.data.startMs, endMs: body.data.endMs });
+    if (startMs !== undefined && endMs !== undefined) {
+      clip = await updateClipTiming(params.clipId, { startMs, endMs });
     }
-    if (body.data.text !== undefined) {
-      clip = await updateClipText(params.clipId, body.data.text);
+    if (text !== undefined) {
+      clip = await updateClipText(params.clipId, text);
+    }
+    if (style !== undefined) {
+      clip = await updateClipStyle(params.clipId, style);
+    }
+    if (hasVideoProps) {
+      clip = await updateClipVideoProps(params.clipId, { transform, effects, transition, videoOptions, mask, keyframes });
     }
     return NextResponse.json(clip);
   } catch (error) {
