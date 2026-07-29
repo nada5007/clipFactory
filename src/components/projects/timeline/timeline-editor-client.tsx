@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { ArrowLeft, Maximize2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -46,6 +46,10 @@ const SHORTCUTS: { key: string; label: string }[] = [
   { key: "Ctrl+Z / Ctrl+Y", label: "실행 취소/다시 실행" },
 ];
 
+const RIGHT_PANEL_DEFAULT_WIDTH = 288;
+const RIGHT_PANEL_MIN_WIDTH = 220;
+const RIGHT_PANEL_MAX_WIDTH = 560;
+
 export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const [project, setProject] = useState<SerializedProject | null>(null);
   const [images, setImages] = useState<SerializedImageAsset[]>([]);
@@ -64,6 +68,37 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const [rendering, setRendering] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { job, start } = useJobProgress(projectId, "RENDER");
+
+  const [rightPanelWidth, setRightPanelWidth] = useState(RIGHT_PANEL_DEFAULT_WIDTH);
+  const draggingRef = useRef(false);
+
+  // 좌측 콘텐츠 영역 ↔ 우측 속성/품질 분석 패널 사이 너비를 마우스 드래그로 조절한다.
+  useEffect(() => {
+    function handleMouseMove(e: MouseEvent) {
+      if (!draggingRef.current) return;
+      const newWidth = window.innerWidth - e.clientX;
+      setRightPanelWidth(Math.min(RIGHT_PANEL_MAX_WIDTH, Math.max(RIGHT_PANEL_MIN_WIDTH, newWidth)));
+    }
+    function handleMouseUp() {
+      if (draggingRef.current) {
+        draggingRef.current = false;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      }
+    }
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, []);
+
+  function handleDividerMouseDown() {
+    draggingRef.current = true;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -227,7 +262,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
 
       <div className="flex flex-1 overflow-hidden">
         {/* 좌측 콘텐츠 영역 */}
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="min-w-0 flex-1 overflow-y-auto p-4">
           {activeTab === "script" && (
             <div className="rounded-lg bg-background p-4 text-foreground">
               <ScriptPanel projectId={projectId} />
@@ -266,8 +301,17 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
           )}
         </div>
 
+        {/* 리사이즈 핸들: 드래그로 좌측 콘텐츠 ↔ 우측 패널 너비 조절 */}
+        <div
+          onMouseDown={handleDividerMouseDown}
+          className="w-1 shrink-0 cursor-col-resize bg-white/5 hover:bg-primary/60 active:bg-primary"
+        />
+
         {/* 우측 컬럼: 품질 분석 + 속성 패널 */}
-        <div className="flex w-72 shrink-0 flex-col gap-3 overflow-y-auto border-l border-white/10 p-3 text-xs">
+        <div
+          style={{ width: rightPanelWidth }}
+          className="flex shrink-0 flex-col gap-3 overflow-y-auto border-l border-white/10 p-3 text-xs"
+        >
           {lintVisible && (
             <div className="rounded-md border border-sky-400/40 bg-sky-400/10 p-3">
               <p className="mb-1 flex items-center justify-between font-medium text-sky-200">
