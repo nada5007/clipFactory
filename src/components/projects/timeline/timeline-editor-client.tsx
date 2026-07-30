@@ -3,7 +3,7 @@
 import Link from "next/link";
 import {
   ArrowLeft,
-  ArrowLeftRight,
+  Check,
   ClipboardPaste,
   Copy,
   CopyPlus,
@@ -16,6 +16,8 @@ import {
   SplitSquareHorizontal,
   Trash2,
   Undo2,
+  Wind,
+  X,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -34,6 +36,8 @@ import { useJobProgress } from "@/hooks/use-job-progress";
 import {
   analyzeSubtitleLineLength,
   computeTimelineStats,
+  formatMmSsMs,
+  parseMmSsMs,
   RECOMMENDED_SUBTITLE_CHARS_PER_LINE,
   resolveImageEffectsFilter,
   resolveImageKenBurnsTransform,
@@ -80,6 +84,8 @@ const RIGHT_PANEL_MAX_WIDTH = 560;
 // 흰 글자가 거의 안 보이는 대비 문제가 생긴다. bg까지 함께 덮어써서 고정한다.
 const OUTLINE_BTN = "border-white/20 bg-white/5 text-white hover:bg-white/10 hover:text-white";
 const OUTLINE_BTN_DISABLED = "border-white/10 bg-white/5 text-white/30 hover:bg-white/5 hover:text-white/30";
+// "목표 길이 맞추기" 최대값 — 유효성 검사 패널에 이미 안내된 최종 렌더링 길이 제한(1800초)과 동일하게 맞춘다.
+const MAX_TARGET_LENGTH_MS = 1_800_000;
 
 // 실행취소/다시실행 스냅샷: 클립의 시간뿐 아니라 payload까지 통째로 담아, 삭제/생성 같은
 // "클립 목록 자체가 바뀌는" 조작도 되돌릴 수 있게 한다(§1.3 disclosure — 되돌리기는 서버의
@@ -226,16 +232,20 @@ function IconToolbarButton({
 }) {
   return (
     <Tooltip>
+      {/* 비활성(disabled) 상태의 Button은 shadcn 기본 스타일(disabled:pointer-events-none) 때문에
+          마우스오버 이벤트 자체가 발생하지 않아 툴팁이 뜨지 않는다 — span으로 감싸 hover를 그쪽에서 받는다. */}
       <TooltipTrigger asChild>
-        <Button
-          size="icon"
-          variant={destructive ? "destructive" : "outline"}
-          className={cn("size-7", !destructive && OUTLINE_BTN)}
-          onClick={onClick}
-          disabled={disabled}
-        >
-          <Icon className="size-4" />
-        </Button>
+        <span className="inline-flex">
+          <Button
+            size="icon"
+            variant={destructive ? "destructive" : "outline"}
+            className={cn("size-7", !destructive && OUTLINE_BTN)}
+            onClick={onClick}
+            disabled={disabled}
+          >
+            <Icon className="size-4" />
+          </Button>
+        </span>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
@@ -341,7 +351,10 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const [maskTabActive, setMaskTabActive] = useState(false);
   const clipboardRef = useRef<{ trackId: string; payload: PersistedClipPayload; durationMs: number }[]>([]);
   const [breathingGapMs, setBreathingGapMs] = useState(300);
-  const [targetLengthSec, setTargetLengthSec] = useState(60);
+  const [targetLengthMs, setTargetLengthMs] = useState(60000);
+  const [targetLengthDraft, setTargetLengthDraft] = useState(() => formatMmSsMs(60000));
+  // 참조 사이트처럼 호흡구간/목표길이 아이콘을 클릭하면 툴바가 확장되어 인라인 입력+확인/취소가 나타난다.
+  const [openInlineEditor, setOpenInlineEditor] = useState<"breathing" | "scale" | null>(null);
   const [playheadMs, setPlayheadMs] = useState(0);
   const [history, setHistory] = useState<ClipSnapshot[]>([]);
   const [future, setFuture] = useState<ClipSnapshot[]>([]);
@@ -475,10 +488,12 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     } else {
       setSelectedClipId(clipId);
       setMultiSelectedIds(new Set([clipId]));
-      // 선택한 클립이 미리보기 탭에 실제로 표시되도록 재생헤드를 클립 시작 시각으로 이동한다.
+      // 선택한 클립이 미리보기 탭에 실제로 표시되도록 재생헤드를 클립 구간 안으로 이동한다.
       // (미리보기는 재생헤드 기준으로 그려지므로, 이 이동이 없으면 선택한 클립과 무관한 화면이 보일 수 있다.)
+      // 정확히 시작 시각으로 옮기면 canSplit(재생헤드가 시작보다 "엄격히" 커야 함) 조건이 항상 거짓이 되어
+      // 클립을 선택하자마자 분할 버튼이 비활성 상태로 보이는 버그가 있었다 — 중간 지점으로 옮겨 피한다.
       const found = findClip(timeline, clipId);
-      if (found) seekTo(found.clip.startMs);
+      if (found) seekTo(Math.floor((found.clip.startMs + found.clip.endMs) / 2));
     }
   }
 
@@ -897,21 +912,24 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     } else {
       setError((await res.json().catch(() => null))?.error ?? "호흡구간 추가에 실패했습니다.");
     }
+    setOpenInlineEditor(null);
   }
 
-  async function handleScaleTrack() {
+  async function handleScaleTrack(overrideTargetMs?: number) {
     if (!selected) return;
+    const targetMs = overrideTargetMs ?? targetLengthMs;
     pushHistory();
     const res = await fetch(`/api/projects/${projectId}/timeline/tracks/${selected.track.id}/scale-to-duration`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetDurationMs: Math.round(targetLengthSec * 1000) }),
+      body: JSON.stringify({ targetDurationMs: targetMs }),
     });
     if (res.ok) {
       await fetchAll();
     } else {
       setError((await res.json().catch(() => null))?.error ?? "길이 조정에 실패했습니다.");
     }
+    setOpenInlineEditor(null);
   }
 
   // "+ 트랙 추가": 자동 동기화되지 않는(autoSync=false) 새 트랙을 만든다. 아직 렌더링에는 연결되지 않는다.
@@ -1503,18 +1521,29 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
           <span className="mx-1 text-white/20">|</span>
 
           <div className="flex items-center gap-1">
-            <IconToolbarButton icon={ArrowLeftRight} label="TTS 전체에 호흡구간 추가" onClick={handleAddBreathingGaps} />
-            <select
-              className="rounded border border-white/20 bg-white/5 px-1 py-1 text-white"
-              value={breathingGapMs}
-              onChange={(e) => setBreathingGapMs(Number(e.target.value))}
-            >
-              {[100, 150, 200, 250, 300, 350, 400, 450, 500].map((ms) => (
-                <option key={ms} value={ms}>
-                  {(ms / 1000).toFixed(2)}초
-                </option>
-              ))}
-            </select>
+            <IconToolbarButton
+              icon={Wind}
+              label="TTS 전체에 호흡구간 추가"
+              onClick={() => setOpenInlineEditor(openInlineEditor === "breathing" ? null : "breathing")}
+            />
+            {openInlineEditor === "breathing" && (
+              <>
+                <span>호흡:</span>
+                <select
+                  className="rounded border border-white/20 bg-white/5 px-1 py-1 text-white"
+                  value={breathingGapMs}
+                  onChange={(e) => setBreathingGapMs(Number(e.target.value))}
+                >
+                  {[100, 150, 200, 250, 300, 350, 400, 450, 500].map((ms) => (
+                    <option key={ms} value={ms}>
+                      {(ms / 1000).toFixed(2)}초
+                    </option>
+                  ))}
+                </select>
+                <IconToolbarButton icon={Check} label="적용" onClick={handleAddBreathingGaps} />
+                <IconToolbarButton icon={X} label="취소" onClick={() => setOpenInlineEditor(null)} />
+              </>
+            )}
           </div>
 
           <span className="mx-1 text-white/20">|</span>
@@ -1522,19 +1551,37 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
           <div className="flex items-center gap-1">
             <IconToolbarButton
               icon={Scale}
-              label="선택한 클립이 속한 트랙 전체를 목표 길이(초)에 맞춰 비례 조정"
-              onClick={handleScaleTrack}
+              label="선택한 클립이 속한 트랙 전체를 목표 길이에 맞춰 비례 조정"
+              onClick={() => {
+                setTargetLengthDraft(formatMmSsMs(targetLengthMs));
+                setOpenInlineEditor(openInlineEditor === "scale" ? null : "scale");
+              }}
               disabled={!selected}
             />
-            <input
-              type="number"
-              step={0.1}
-              min={0.1}
-              className="w-16 rounded border border-white/20 bg-white/5 px-1.5 py-1 text-white"
-              value={targetLengthSec}
-              onChange={(e) => setTargetLengthSec(Number(e.target.value))}
-            />
-            <span>초</span>
+            {openInlineEditor === "scale" && (
+              <>
+                <span>목표:</span>
+                <input
+                  type="text"
+                  className="w-24 rounded border border-white/20 bg-white/5 px-1.5 py-1 font-mono text-white"
+                  value={targetLengthDraft}
+                  onChange={(e) => setTargetLengthDraft(e.target.value)}
+                />
+                <span className="text-white/40">mm:ss.ms (최대 {formatMmSsMs(MAX_TARGET_LENGTH_MS)})</span>
+                <IconToolbarButton
+                  icon={Check}
+                  label="적용"
+                  onClick={() => {
+                    const parsed = parseMmSsMs(targetLengthDraft);
+                    if (parsed === null) return;
+                    const clamped = Math.min(Math.max(parsed, 100), MAX_TARGET_LENGTH_MS);
+                    setTargetLengthMs(clamped);
+                    handleScaleTrack(clamped);
+                  }}
+                />
+                <IconToolbarButton icon={X} label="취소" onClick={() => setOpenInlineEditor(null)} />
+              </>
+            )}
           </div>
         </div>
       </TooltipProvider>
