@@ -16,6 +16,8 @@ import {
   planClipSync,
   removeGapsBetweenSelectedClips,
   removeGapsInClips,
+  resolveImageEffectsFilter,
+  resolveImageKenBurnsTransform,
   rewrapTextToMaxLineLength,
   scaleClipsToTargetDuration,
   snapToGrid,
@@ -407,5 +409,71 @@ describe("formatMmSsMs / parseMmSsMs", () => {
     expect(parseMmSsMs("01:60.000")).toBeNull();
     expect(parseMmSsMs("not-a-time")).toBeNull();
     expect(parseMmSsMs("")).toBeNull();
+  });
+});
+
+describe("resolveImageEffectsFilter", () => {
+  it("effects가 없으면 프리셋 없음 + 항등 슬라이더 필터를 반환한다", () => {
+    const filter = resolveImageEffectsFilter(undefined);
+    expect(filter).toContain("brightness(1.00)");
+    expect(filter).toContain("contrast(1.00)");
+    expect(filter).toContain("saturate(1.00)");
+    expect(filter).toContain("hue-rotate(0.0deg)");
+  });
+
+  it("색보정 프리셋별로 다른 필터 문자열을 반환한다", () => {
+    const none = resolveImageEffectsFilter({ colorPreset: "none" });
+    const bw = resolveImageEffectsFilter({ colorPreset: "bw-classic" });
+    expect(bw).toContain("grayscale(1)");
+    expect(bw).not.toBe(none);
+  });
+
+  it("밝기/대비/채도/색온도 슬라이더 값을 필터에 반영한다", () => {
+    const filter = resolveImageEffectsFilter({ brightness: 0.4, contrast: -0.2, saturation: 1, temperature: -1 });
+    expect(filter).toContain("brightness(1.20)");
+    expect(filter).toContain("contrast(0.90)");
+    expect(filter).toContain("saturate(1.70)");
+    expect(filter).toContain("hue-rotate(15.0deg)");
+  });
+
+  it("채도 슬라이더가 음수로 크게 내려가도 0 미만으로 떨어지지 않는다", () => {
+    const filter = resolveImageEffectsFilter({ saturation: -1 });
+    expect(filter).toContain("saturate(0.30)");
+  });
+});
+
+describe("resolveImageKenBurnsTransform", () => {
+  it("패닝/줌이 모두 꺼져 있으면 빈 문자열을 반환한다", () => {
+    expect(resolveImageKenBurnsTransform(undefined, "clip-1", 0.5)).toBe("");
+  });
+
+  it("줌 인은 진행률에 따라 1배에서 강도까지 커진다", () => {
+    const effects = { zoomEnabled: true, zoomType: "in" as const, zoomIntensity: 1.5 };
+    expect(resolveImageKenBurnsTransform(effects, "clip-1", 0)).toContain("scale(1.000)");
+    expect(resolveImageKenBurnsTransform(effects, "clip-1", 1)).toContain("scale(1.500)");
+  });
+
+  it("줌 아웃은 진행률에 따라 강도에서 1배로 줄어든다", () => {
+    const effects = { zoomEnabled: true, zoomType: "out" as const, zoomIntensity: 1.5 };
+    expect(resolveImageKenBurnsTransform(effects, "clip-1", 0)).toContain("scale(1.500)");
+    expect(resolveImageKenBurnsTransform(effects, "clip-1", 1)).toContain("scale(1.000)");
+  });
+
+  it("진행률은 0~1로 clamp된다", () => {
+    const effects = { zoomEnabled: true, zoomType: "in" as const, zoomIntensity: 2 };
+    expect(resolveImageKenBurnsTransform(effects, "clip-1", -5)).toContain("scale(1.000)");
+    expect(resolveImageKenBurnsTransform(effects, "clip-1", 5)).toContain("scale(2.000)");
+  });
+
+  it("패닝 방향이 random이 아니면 지정한 방향으로 이동한다", () => {
+    const left = resolveImageKenBurnsTransform({ panEnabled: true, panDirection: "left" }, "clip-1", 1);
+    const right = resolveImageKenBurnsTransform({ panEnabled: true, panDirection: "right" }, "clip-1", 1);
+    expect(left).not.toBe(right);
+  });
+
+  it("같은 클립 ID의 random 방향은 호출할 때마다 동일하게 유지된다", () => {
+    const a = resolveImageKenBurnsTransform({ panEnabled: true, panDirection: "random" }, "clip-xyz", 1);
+    const b = resolveImageKenBurnsTransform({ panEnabled: true, panDirection: "random" }, "clip-xyz", 1);
+    expect(a).toBe(b);
   });
 });

@@ -17,6 +17,8 @@ import {
   analyzeSubtitleLineLength,
   computeTimelineStats,
   RECOMMENDED_SUBTITLE_CHARS_PER_LINE,
+  resolveImageEffectsFilter,
+  resolveImageKenBurnsTransform,
   resolveSubtitleStyle,
   validateTimeline,
   type PersistedClipPayload,
@@ -474,6 +476,14 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const previewSubtitleStyle = previewSubtitleClip
     ? resolveSubtitleStyle(previewSubtitleClip.payload.style, videoResolution.width, videoResolution.height)
     : null;
+  // "이미지 효과" 탭의 색보정/패닝/줌 값도 마스크·자막 스타일과 같은 방식으로 미리보기에 근사 반영한다.
+  const previewImageFilter = previewImageClip ? resolveImageEffectsFilter(previewImageClip.payload.effects) : "";
+  const previewImageProgress = previewImageClip
+    ? (playheadMs - previewImageClip.startMs) / Math.max(1, previewImageClip.endMs - previewImageClip.startMs)
+    : 0;
+  const previewImageTransform = previewImageClip
+    ? resolveImageKenBurnsTransform(previewImageClip.payload.effects, previewImageClip.id, previewImageProgress)
+    : "";
 
   // 미리보기는 브라우저에 실제 해상도(예: 1080x1920)보다 작게 그려지므로, 컨테이너의 실측 너비를 재서
   // 폰트 크기/위치/테두리 두께 같은 절대 px 값들을 그 비율만큼 축소해 실제 영상과 같은 비율로 보이게 한다.
@@ -1167,14 +1177,16 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                       src={`/api/projects/${projectId}/images/${previewImageClip.payload.sourceId}/file`}
                       alt=""
                       className="size-full object-cover"
-                      style={
-                        previewImageClip.payload.mask
+                      style={{
+                        ...(previewImageClip.payload.mask
                           ? {
                               maskImage: `url(#preview-mask-${previewImageClip.id})`,
                               WebkitMaskImage: `url(#preview-mask-${previewImageClip.id})`,
                             }
-                          : undefined
-                      }
+                          : undefined),
+                        filter: previewImageFilter || undefined,
+                        transform: previewImageTransform || undefined,
+                      }}
                     />
                   </>
                 ) : (

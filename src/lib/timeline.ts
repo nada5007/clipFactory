@@ -144,6 +144,85 @@ export const COLOR_PRESETS = [
   { key: "dreamy", label: "몽환적" },
 ] as const;
 
+// 색보정 프리셋별 CSS filter 레시피 — ffmpeg 렌더링 필터와 픽셀 단위로 일치하지 않는 미리보기 근사치.
+const COLOR_PRESET_FILTERS: Record<string, string> = {
+  none: "",
+  cinematic: "brightness(0.95) contrast(1.15) saturate(0.85)",
+  "neo-noir": "brightness(0.85) contrast(1.3) saturate(0.6) hue-rotate(200deg)",
+  "blue-steel": "contrast(1.2) saturate(0.7) sepia(0.2) hue-rotate(180deg)",
+  "golden-hour": "brightness(1.05) saturate(1.3) sepia(0.25) hue-rotate(-10deg)",
+  "retro-film": "contrast(1.05) saturate(1.1) sepia(0.35)",
+  sepia: "sepia(0.8)",
+  faded: "brightness(1.05) contrast(0.85) saturate(0.7)",
+  polaroid: "brightness(1.05) contrast(0.95) saturate(1.2) sepia(0.15)",
+  vivid: "contrast(1.15) saturate(1.6)",
+  hdr: "brightness(1.05) contrast(1.25) saturate(1.3)",
+  "pop-color": "contrast(1.2) saturate(1.7)",
+  warm: "saturate(1.15) sepia(0.2) hue-rotate(-8deg)",
+  cool: "brightness(1.02) saturate(1.05) hue-rotate(15deg)",
+  "golden-tone": "brightness(1.05) saturate(1.25) sepia(0.3)",
+  "bw-classic": "grayscale(1)",
+  "bw-high-contrast": "grayscale(1) contrast(1.4)",
+  "film-noir": "grayscale(1) brightness(0.9) contrast(1.3)",
+  "soft-bw": "grayscale(1) brightness(1.05) contrast(0.85)",
+  dreamy: "brightness(1.1) contrast(0.9) saturate(0.9) blur(0.5px)",
+};
+
+// 색보정 프리셋 + 밝기/대비/채도/색온도 슬라이더를 미리보기용 CSS filter 문자열로 합성한다.
+// 슬라이더는 -1~1 범위이며, 색온도는 hue-rotate로 근사한다(정확한 색온도 커브가 아님).
+export function resolveImageEffectsFilter(effects: Partial<VideoClipEffects> | undefined): string {
+  const e = { ...DEFAULT_VIDEO_EFFECTS, ...effects };
+  const parts = [COLOR_PRESET_FILTERS[e.colorPreset] ?? ""];
+  parts.push(`brightness(${(1 + e.brightness * 0.5).toFixed(2)})`);
+  parts.push(`contrast(${(1 + e.contrast * 0.5).toFixed(2)})`);
+  parts.push(`saturate(${Math.max(0, 1 + e.saturation * 0.7).toFixed(2)})`);
+  parts.push(`hue-rotate(${(e.temperature * -15).toFixed(1)}deg)`);
+  return parts.filter(Boolean).join(" ");
+}
+
+const PAN_SPEED_BLEED_PCT: Record<PanSpeed, number> = { slow: 6, normal: 10, fast: 16 };
+
+// panDirection이 "random"이면 클립 ID를 해시해 클립마다 고정된(재생할 때마다 바뀌지 않는) 방향을 고른다.
+function resolvePanDirection(direction: PanDirection, clipId: string): Exclude<PanDirection, "random"> {
+  if (direction !== "random") return direction;
+  const options: Exclude<PanDirection, "random">[] = ["left", "right", "up", "down"];
+  let hash = 0;
+  for (let i = 0; i < clipId.length; i++) hash = (hash * 31 + clipId.charCodeAt(i)) >>> 0;
+  return options[hash % options.length];
+}
+
+// 패닝/줌(켄 번즈) 효과를 클립 진행률(0~1) 기준 CSS transform으로 근사한다.
+// progress는 (재생헤드 - 클립 시작) / 클립 길이로, 호출부에서 0~1로 clamp해 전달한다.
+export function resolveImageKenBurnsTransform(
+  effects: Partial<ImageClipEffects> | undefined,
+  clipId: string,
+  progress: number,
+): string {
+  const e = { ...DEFAULT_IMAGE_EFFECTS, ...effects };
+  if (!e.zoomEnabled && !e.panEnabled) return "";
+  const p = Math.max(0, Math.min(1, progress));
+
+  let scale = 1;
+  if (e.zoomEnabled) {
+    scale = e.zoomType === "in" ? 1 + (e.zoomIntensity - 1) * p : e.zoomIntensity - (e.zoomIntensity - 1) * p;
+  }
+
+  let translateXPct = 0;
+  let translateYPct = 0;
+  if (e.panEnabled) {
+    const bleedPct = PAN_SPEED_BLEED_PCT[e.panSpeed];
+    scale = Math.max(scale, 1 + bleedPct / 100);
+    const offsetPct = (p - 0.5) * bleedPct;
+    const direction = resolvePanDirection(e.panDirection, clipId);
+    if (direction === "left") translateXPct = offsetPct;
+    else if (direction === "right") translateXPct = -offsetPct;
+    else if (direction === "up") translateYPct = offsetPct;
+    else if (direction === "down") translateYPct = -offsetPct;
+  }
+
+  return `scale(${scale.toFixed(3)}) translate(${translateXPct.toFixed(2)}%, ${translateYPct.toFixed(2)}%)`;
+}
+
 export type TransitionType =
   | "none"
   | "fade"
