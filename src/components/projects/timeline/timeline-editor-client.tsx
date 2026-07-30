@@ -17,6 +17,7 @@ import {
   analyzeSubtitleLineLength,
   computeTimelineStats,
   RECOMMENDED_SUBTITLE_CHARS_PER_LINE,
+  resolveSubtitleStyle,
   validateTimeline,
   type PersistedClipPayload,
   type PersistedTimeline,
@@ -106,6 +107,15 @@ function formatClipTimecode(ms: number): string {
   const m = Math.floor(totalSec / 60);
   const s = (totalSec % 60).toFixed(1).padStart(4, "0");
   return `${String(m).padStart(2, "0")}:${s}`;
+}
+
+// 자막 스타일 탭의 배경색+투명도를 미리보기 탭의 CSS로 그대로 옮기기 위한 변환.
+function hexToRgba(hex: string, opacity: number): string {
+  const clean = hex.replace("#", "").padEnd(6, "0").slice(0, 6);
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${Math.min(1, Math.max(0, opacity))})`;
 }
 
 // 자막 탭 세그먼트 카드: 재생 중 현재 위치의 카드로 자동 스크롤 + 하이라이트되며,
@@ -451,6 +461,26 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   // 미리보기 탭 합성용: 재생 여부와 무관하게 항상 현재 재생헤드 위치의 이미지/자막을 보여준다.
   const previewImageClip = findClipAtMs(getTrackClips("IMAGE"), playheadMs);
   const previewSubtitleClip = findClipAtMs(getTrackClips("SUBTITLE"), playheadMs);
+  // 스타일 탭에서 설정한 폰트/크기/색상/배경/위치/테두리가 실제 렌더링(ASS 번인)과 동일하게 반영되도록,
+  // 하드코딩된 스타일 대신 resolveSubtitleStyle 결과를 그대로 쓴다.
+  const previewSubtitleStyle = previewSubtitleClip
+    ? resolveSubtitleStyle(previewSubtitleClip.payload.style, videoResolution.width, videoResolution.height)
+    : null;
+
+  // 미리보기는 브라우저에 실제 해상도(예: 1080x1920)보다 작게 그려지므로, 컨테이너의 실측 너비를 재서
+  // 폰트 크기/위치/테두리 두께 같은 절대 px 값들을 그 비율만큼 축소해 실제 영상과 같은 비율로 보이게 한다.
+  const previewContainerRef = useRef<HTMLDivElement>(null);
+  const [previewScale, setPreviewScale] = useState(1);
+  useEffect(() => {
+    if (activeTab !== "preview") return;
+    const el = previewContainerRef.current;
+    if (!el) return;
+    const update = () => setPreviewScale(el.clientWidth / videoResolution.width);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [activeTab, videoResolution.width]);
 
   function playTtsFrom(atMs: number) {
     const ttsClips = getTrackClips("TTS");
@@ -1065,6 +1095,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
           {activeTab === "preview" && (
             <div className="flex h-full items-center justify-center">
               <div
+                ref={previewContainerRef}
                 className={cn(
                   "relative overflow-hidden rounded-lg bg-black",
                   project?.videoFormat === "SHORT" ? "aspect-[9/16] h-full max-h-[70vh]" : "aspect-video w-full max-w-2xl",
@@ -1081,8 +1112,24 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                 ) : (
                   <div className="flex h-full items-center justify-center text-sm text-white/30">이미지 없음</div>
                 )}
-                {previewSubtitleClip?.payload.text && (
-                  <p className="absolute inset-x-4 bottom-6 rounded bg-black/60 px-3 py-2 text-center text-base font-medium text-white">
+                {previewSubtitleClip?.payload.text && previewSubtitleStyle && (
+                  <p
+                    className="absolute max-w-[90%] whitespace-pre-line text-center"
+                    style={{
+                      left: previewSubtitleStyle.positionXPx * previewScale,
+                      top: previewSubtitleStyle.positionYPx * previewScale,
+                      transform: "translate(-50%, -50%)",
+                      fontFamily: previewSubtitleStyle.fontFamily,
+                      fontSize: previewSubtitleStyle.fontSizePx * previewScale,
+                      fontWeight: previewSubtitleStyle.bold ? 700 : 400,
+                      color: previewSubtitleStyle.fontColor,
+                      backgroundColor: hexToRgba(previewSubtitleStyle.backgroundColor, previewSubtitleStyle.backgroundOpacity),
+                      border: `${Math.max(previewSubtitleStyle.borderWidthPx * previewScale, 0)}px solid ${previewSubtitleStyle.borderColor}`,
+                      padding: `${4 * previewScale}px ${10 * previewScale}px`,
+                      borderRadius: 4 * previewScale,
+                      lineHeight: 1.3,
+                    }}
+                  >
                     {previewSubtitleClip.payload.text}
                   </p>
                 )}
