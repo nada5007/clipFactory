@@ -1,5 +1,6 @@
 "use client";
 
+import { ChevronDown, ChevronUp, Eye, EyeOff, List, Lock, Unlock } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
@@ -71,6 +72,9 @@ export function TimelineTracks({
   onAddTrack,
   onRemoveTrack,
   onUploadToTrack,
+  onUpdateTrackFlags,
+  onReorderTrack,
+  onRemoveTrackGaps,
 }: {
   timeline: PersistedTimeline;
   zoom: number;
@@ -86,6 +90,9 @@ export function TimelineTracks({
   onAddTrack: (type: TimelineTrackType) => void;
   onRemoveTrack: (trackId: string) => void;
   onUploadToTrack: (trackId: string, file: File) => void;
+  onUpdateTrackFlags: (trackId: string, patch: { visible?: boolean; locked?: boolean }) => void;
+  onReorderTrack: (trackId: string, direction: "up" | "down") => void;
+  onRemoveTrackGaps: (trackId: string) => void;
 }) {
   const pxPerSec = (BASE_PX_PER_SEC * zoom) / 100;
   const durationSec = timeline.durationMs / 1000;
@@ -176,6 +183,8 @@ export function TimelineTracks({
       return;
     }
     onSelectClip(clip.id, false);
+    // 잠긴 트랙은 선택은 되지만 이동/트림은 시작하지 않는다("이동/편집 방지").
+    if (track.locked) return;
     beginInteraction(mode, track, clip, e);
   }
 
@@ -223,40 +232,80 @@ export function TimelineTracks({
       </div>
 
       <div className="flex flex-1 overflow-auto">
-        <div className="sticky left-0 z-10 flex w-32 shrink-0 flex-col bg-[#0d1017]">
+        <div className="sticky left-0 z-10 flex w-40 shrink-0 flex-col bg-[#0d1017]">
           <div className="h-6 shrink-0 border-b border-white/10" />
-          {timeline.tracks.map((track) => (
-            <div
-              key={track.id}
-              className="flex h-8 shrink-0 items-center gap-1 border-b border-white/5 px-2 text-white/70"
-            >
-              <span className={cn("size-2 shrink-0 rounded-full", TRACK_COLORS[track.type])} />
-              <span className="truncate">{track.name}</span>
-              <div className="ml-auto flex shrink-0 items-center gap-0.5">
-                <label
-                  className="cursor-pointer rounded px-1 text-white/40 hover:bg-white/10 hover:text-white"
-                  title="클립 추가(직접 업로드)"
-                >
-                  +
-                  <input
-                    type="file"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) onUploadToTrack(track.id, file);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
-                {!track.autoSync && (
+          {timeline.tracks.map((track, idx) => (
+            <div key={track.id} className="flex h-14 shrink-0 flex-col justify-center gap-0.5 border-b border-white/5 px-2 text-white/70">
+              <div className="flex items-center gap-1">
+                <span className={cn("size-2 shrink-0 rounded-full", TRACK_COLORS[track.type])} />
+                <span className="truncate">{track.name}</span>
+                <div className="ml-auto flex shrink-0 items-center">
                   <button
-                    onClick={() => onRemoveTrack(track.id)}
-                    className="rounded px-1 text-white/40 hover:bg-white/10 hover:text-red-400"
-                    title="트랙 삭제"
+                    onClick={() => onReorderTrack(track.id, "up")}
+                    disabled={idx === 0}
+                    className="rounded text-white/40 hover:bg-white/10 hover:text-white disabled:opacity-20 disabled:hover:bg-transparent"
+                    title="위로 — 같은 종류 소스 중 표출 우선순위를 높임"
                   >
-                    ×
+                    <ChevronUp className="size-3" />
                   </button>
-                )}
+                  <button
+                    onClick={() => onReorderTrack(track.id, "down")}
+                    disabled={idx === timeline.tracks.length - 1}
+                    className="rounded text-white/40 hover:bg-white/10 hover:text-white disabled:opacity-20 disabled:hover:bg-transparent"
+                    title="아래로 — 같은 종류 소스 중 표출 우선순위를 낮춤"
+                  >
+                    <ChevronDown className="size-3" />
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center gap-0.5">
+                <button
+                  onClick={() => onUpdateTrackFlags(track.id, { visible: track.visible === false })}
+                  className="rounded px-1 text-white/40 hover:bg-white/10 hover:text-white"
+                  title={track.visible === false ? "숨김 — 미리보기에서 보이기" : "보임 — 미리보기에서 숨기기"}
+                >
+                  {track.visible === false ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
+                </button>
+                <button
+                  onClick={() => onUpdateTrackFlags(track.id, { locked: !track.locked })}
+                  className="rounded px-1 text-white/40 hover:bg-white/10 hover:text-white"
+                  title={track.locked ? "잠금 해제" : "잠금 — 편집/이동 방지"}
+                >
+                  {track.locked ? <Lock className="size-3" /> : <Unlock className="size-3" />}
+                </button>
+                <button
+                  onClick={() => onRemoveTrackGaps(track.id)}
+                  className="rounded px-1 text-white/40 hover:bg-white/10 hover:text-white"
+                  title="클립 사이 빈 공간 제거"
+                >
+                  <List className="size-3" />
+                </button>
+                <div className="ml-auto flex shrink-0 items-center gap-0.5">
+                  <label
+                    className="cursor-pointer rounded px-1 text-white/40 hover:bg-white/10 hover:text-white"
+                    title="클립 추가(직접 업로드)"
+                  >
+                    +
+                    <input
+                      type="file"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) onUploadToTrack(track.id, file);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  {!track.autoSync && (
+                    <button
+                      onClick={() => onRemoveTrack(track.id)}
+                      className="rounded px-1 text-white/40 hover:bg-white/10 hover:text-red-400"
+                      title="트랙 삭제"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           ))}
@@ -293,7 +342,7 @@ export function TimelineTracks({
           </div>
 
           {timeline.tracks.map((track) => (
-            <div key={track.id} className="relative h-8 border-b border-white/5">
+            <div key={track.id} className="relative h-14 border-b border-white/5">
               {track.clips.map((clip) => {
                 const isPreview = preview?.clipId === clip.id;
                 const startMs = isPreview ? preview!.startMs : clip.startMs;
@@ -308,7 +357,7 @@ export function TimelineTracks({
                     title={clip.payload.label}
                     onMouseDown={(e) => handleClipMouseDown("move", track, clip, e)}
                     className={cn(
-                      "absolute top-1 h-6 cursor-grab overflow-hidden rounded-sm px-1 text-[10px] leading-6 text-black/80 active:cursor-grabbing",
+                      "absolute top-2 flex h-10 cursor-grab items-center overflow-hidden rounded-sm px-1 text-[10px] text-black/80 active:cursor-grabbing",
                       TRACK_COLORS[track.type],
                       selected && "ring-2 ring-white",
                       multiSelected && "ring-2 ring-sky-400",

@@ -607,6 +607,30 @@ export async function removeTrack(trackId: string) {
   await prisma.timelineTrack.delete({ where: { id: trackId } });
 }
 
+// 트랙 헤더의 보이기/숨기기(visible)·잠금(locked) 토글.
+export async function updateTrackFlags(trackId: string, patch: { visible?: boolean; locked?: boolean }) {
+  return prisma.timelineTrack.update({ where: { id: trackId }, data: patch });
+}
+
+// 트랙 상하 이동: 트랙 타입과 무관하게 같은 타임라인의 전체 트랙을 order 기준으로 정렬한 목록에서
+// 바로 위/아래 트랙과 order 값을 맞바꾼다. 이 순서가 같은 타입 소스 간 미리보기/렌더링 표출 우선순위가 된다.
+export async function reorderTrack(trackId: string, direction: "up" | "down") {
+  const track = await prisma.timelineTrack.findUniqueOrThrow({ where: { id: trackId } });
+  const siblings = await prisma.timelineTrack.findMany({
+    where: { timelineId: track.timelineId },
+    orderBy: { order: "asc" },
+  });
+  const idx = siblings.findIndex((t) => t.id === trackId);
+  const targetIdx = direction === "up" ? idx - 1 : idx + 1;
+  if (targetIdx < 0 || targetIdx >= siblings.length) return;
+
+  const target = siblings[targetIdx];
+  await prisma.$transaction([
+    prisma.timelineTrack.update({ where: { id: track.id }, data: { order: target.order } }),
+    prisma.timelineTrack.update({ where: { id: target.id }, data: { order: track.order } }),
+  ]);
+}
+
 // "직접 업로드"로 트랙에 클립을 추가한다. 렌더링에는 아직 연결되지 않는다(§1.3 "트랙/클립 추가" 참고).
 export async function addUploadedMediaClip(
   trackId: string,

@@ -551,8 +551,14 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     audio.playbackRate = bgmSettings.playbackSpeed;
   }, [bgmSettings]);
 
+  // 같은 타입 트랙이 여러 개면(예: "+ 트랙 추가"로 만든 Image 2) visible한 트랙 중 order가 가장 작은
+  // (우선순위가 가장 높은) 트랙 하나만 미리보기/재생에 쓴다. 시간대별로 트랙을 넘나드는 완전한 레이어
+  // 합성(겹친 구간만 상위가 이김)은 후속 라운드 과제로 남겨둔다(§1.3 disclosure).
   function getTrackClips(type: PersistedTimeline["tracks"][number]["type"]) {
-    return timeline?.tracks.find((t) => t.type === type)?.clips ?? [];
+    const candidates = (timeline?.tracks ?? [])
+      .filter((t) => t.type === type && t.visible !== false)
+      .sort((a, b) => a.order - b.order);
+    return candidates[0]?.clips ?? [];
   }
 
   function findClipAtMs(clips: PersistedTimelineClip[], ms: number) {
@@ -917,10 +923,13 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     if (lastError) setError(lastError);
   }
 
-  async function handleRemoveTrackGaps() {
-    if (!selected) return;
+  // trackId를 명시하면 그 트랙을(트랙 헤더의 "빈 공간 제거" 아이콘), 생략하면 현재 선택된 클립이
+  // 속한 트랙을(편집 도구 툴바의 아이콘) 대상으로 한다.
+  async function handleRemoveTrackGaps(trackId?: string) {
+    const targetId = trackId ?? selected?.track.id;
+    if (!targetId) return;
     pushHistory();
-    const res = await fetch(`/api/projects/${projectId}/timeline/tracks/${selected.track.id}/remove-gaps`, { method: "POST" });
+    const res = await fetch(`/api/projects/${projectId}/timeline/tracks/${targetId}/remove-gaps`, { method: "POST" });
     if (res.ok) {
       await fetchAll();
     } else {
@@ -999,6 +1008,33 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
       await fetchAll();
     } else {
       setError((await res.json().catch(() => null))?.error ?? "트랙 삭제에 실패했습니다.");
+    }
+  }
+
+  // 트랙 헤더의 보이기/숨기기·잠금 토글 — 낙관적으로 먼저 반영한 뒤 서버에 반영한다.
+  async function handleUpdateTrackFlags(trackId: string, patch: { visible?: boolean; locked?: boolean }) {
+    setTimeline((prev) =>
+      prev ? { ...prev, tracks: prev.tracks.map((t) => (t.id === trackId ? { ...t, ...patch } : t)) } : prev,
+    );
+    const res = await fetch(`/api/projects/${projectId}/timeline/tracks/${trackId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) await fetchAll();
+  }
+
+  // 트랙 상하 이동(같은 타입 소스 간 표출 우선순위).
+  async function handleReorderTrack(trackId: string, direction: "up" | "down") {
+    const res = await fetch(`/api/projects/${projectId}/timeline/tracks/${trackId}/reorder`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ direction }),
+    });
+    if (res.ok) {
+      await fetchAll();
+    } else {
+      setError((await res.json().catch(() => null))?.error ?? "순서 변경에 실패했습니다.");
     }
   }
 
@@ -1645,6 +1681,9 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
         onAddTrack={handleAddTrack}
         onRemoveTrack={handleRemoveTrack}
         onUploadToTrack={handleUploadToTrack}
+        onUpdateTrackFlags={handleUpdateTrackFlags}
+        onReorderTrack={handleReorderTrack}
+        onRemoveTrackGaps={handleRemoveTrackGaps}
       />
 
       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}

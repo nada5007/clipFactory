@@ -12,6 +12,7 @@ import {
   pasteClips,
   removeGapsBetweenClips,
   removeTrackGaps,
+  reorderTrack,
   restoreClipsSnapshot,
   scaleTrackToTargetDuration,
   splitClip,
@@ -19,6 +20,7 @@ import {
   updateAudioOptions,
   updateClipText,
   updateClipTiming,
+  updateTrackFlags,
 } from "@/server/services/timeline.service";
 
 async function createTestProject(input: {
@@ -588,3 +590,66 @@ describe("updateAudioOptions", () => {
 function toPayloadAudioOptions(payload: unknown) {
   return (payload as { audioOptions?: unknown }).audioOptions;
 }
+
+describe("reorderTrack / updateTrackFlags", () => {
+  it("트랙을 위로 옮기면 바로 앞 트랙과 order가 맞바뀐다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [{ order: 0, text: "문장", startMs: 0, endMs: 1000 }],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const sorted = [...timeline!.tracks].sort((a, b) => a.order - b.order);
+      const [first, second] = sorted;
+
+      await reorderTrack(second.id, "up");
+
+      const updatedFirst = await prisma.timelineTrack.findUniqueOrThrow({ where: { id: first.id } });
+      const updatedSecond = await prisma.timelineTrack.findUniqueOrThrow({ where: { id: second.id } });
+      expect(updatedSecond.order).toBe(first.order);
+      expect(updatedFirst.order).toBe(second.order);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("맨 위 트랙을 위로, 맨 아래 트랙을 아래로 옮기려 하면 아무 일도 일어나지 않는다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [{ order: 0, text: "문장", startMs: 0, endMs: 1000 }],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const sorted = [...timeline!.tracks].sort((a, b) => a.order - b.order);
+      const firstTrack = sorted[0];
+      const lastTrack = sorted[sorted.length - 1];
+
+      await reorderTrack(firstTrack.id, "up");
+      await reorderTrack(lastTrack.id, "down");
+
+      const updatedFirst = await prisma.timelineTrack.findUniqueOrThrow({ where: { id: firstTrack.id } });
+      const updatedLast = await prisma.timelineTrack.findUniqueOrThrow({ where: { id: lastTrack.id } });
+      expect(updatedFirst.order).toBe(firstTrack.order);
+      expect(updatedLast.order).toBe(lastTrack.order);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("visible/locked을 토글할 수 있다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [{ order: 0, text: "문장", startMs: 0, endMs: 1000 }],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const track = timeline!.tracks[0];
+
+      const updated = await updateTrackFlags(track.id, { visible: false, locked: true });
+      expect(updated.visible).toBe(false);
+      expect(updated.locked).toBe(true);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+});

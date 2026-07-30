@@ -315,6 +315,11 @@ export type PersistedTimelineTrack = {
   order: number;
   // true: syncTimeline이 관리하는 자동 트랙(타입당 최초 1개). false: "트랙 추가"로 사용자가 만든 트랙.
   autoSync: boolean;
+  // 미리보기/렌더링에 표출할지 여부. 같은 타입 트랙이 여럿이면 order가 가장 작은(우선순위가 가장 높은)
+  // visible 트랙 하나만 쓰인다.
+  visible: boolean;
+  // 잠금: 클립 드래그(이동/트림)를 막는다(선택은 허용).
+  locked: boolean;
   clips: PersistedTimelineClip[];
 };
 
