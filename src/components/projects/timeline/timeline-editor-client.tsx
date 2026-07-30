@@ -266,6 +266,7 @@ function PlaybackToolbar({
   onZoomChange,
   snapEnabled,
   onSnapChange,
+  editTools,
 }: {
   isPlaying: boolean;
   onTogglePlay: () => void;
@@ -279,20 +280,25 @@ function PlaybackToolbar({
   onZoomChange: (v: number) => void;
   snapEnabled: boolean;
   onSnapChange: (v: boolean) => void;
+  // 참조 사이트처럼 재생 툴바(좌)와 편집 도구 아이콘(중앙)을 한 줄에 배치할 때만 전달한다.
+  editTools?: React.ReactNode;
 }) {
-  return (
-    <div className="flex items-center gap-3 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
-      <div className="flex items-center gap-2 text-sm">
-        <button onClick={onSeekStart} className="text-white/60 hover:text-white" title="처음으로 (Home)">
-          |◀
-        </button>
-        <button onClick={onTogglePlay} className="text-white hover:text-white/80" title="재생/일시정지 (Space)">
-          {isPlaying ? "⏸" : "▶"}
-        </button>
-        <button onClick={onSeekEnd} className="text-white/60 hover:text-white" title="끝으로 (End)">
-          ▶|
-        </button>
-      </div>
+  const playbackControls = (
+    <div className="flex items-center gap-2 text-sm">
+      <button onClick={onSeekStart} className="text-white/60 hover:text-white" title="처음으로 (Home)">
+        |◀
+      </button>
+      <button onClick={onTogglePlay} className="text-white hover:text-white/80" title="재생/일시정지 (Space)">
+        {isPlaying ? "⏸" : "▶"}
+      </button>
+      <button onClick={onSeekEnd} className="text-white/60 hover:text-white" title="끝으로 (End)">
+        ▶|
+      </button>
+    </div>
+  );
+
+  const rightControls = (
+    <>
       <div className="flex items-center gap-1.5">
         <span>속도</span>
         <Slider
@@ -305,7 +311,7 @@ function PlaybackToolbar({
         />
         <span className="w-9 shrink-0">{playbackSpeed.toFixed(1)}x</span>
       </div>
-      <span>
+      <span className="shrink-0">
         {(playheadMs / 1000).toFixed(2)}s / {(durationMs / 1000).toFixed(2)}s
       </span>
       <div className="flex items-center gap-1.5">
@@ -314,14 +320,33 @@ function PlaybackToolbar({
         <ZoomIn className="size-3.5 text-white/40" />
         <span className="w-9 shrink-0">{zoom}%</span>
       </div>
-      <span className="ml-auto rounded-full bg-white/5 px-2 py-0.5">
+      <span className={cn("shrink-0 rounded-full bg-white/5 px-2 py-0.5", !editTools && "ml-auto")}>
         ⓘ Preview Mode — 애니메이션/전환효과는 렌더링 후 확인
       </span>
-      <label className="flex items-center gap-1">
+      <label className="flex shrink-0 items-center gap-1">
         <Checkbox checked={snapEnabled} onCheckedChange={(v) => onSnapChange(Boolean(v))} />
         스냅
       </label>
-      <Maximize2 className="size-3.5" />
+      <Maximize2 className="size-3.5 shrink-0" />
+    </>
+  );
+
+  // 참조 사이트 배치(재생 툴바 좌측 / 편집 도구 중앙 / 나머지 우측)를 3열 그리드로 재현한다 —
+  // 가운데 열이 남는 공간을 모두 차지해 좌우 콘텐츠 폭과 무관하게 항상 중앙에 오도록 한다.
+  if (editTools) {
+    return (
+      <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
+        {playbackControls}
+        <div className="flex flex-wrap items-center justify-center gap-1.5">{editTools}</div>
+        <div className="flex items-center gap-3">{rightControls}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-3 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
+      {playbackControls}
+      {rightControls}
     </div>
   );
 }
@@ -1472,118 +1497,119 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
         </div>
       </div>
 
-      <PlaybackToolbar
-        isPlaying={isPlaying}
-        onTogglePlay={togglePlay}
-        onSeekStart={() => seekTo(0)}
-        onSeekEnd={() => seekTo(timeline.durationMs)}
-        playheadMs={playheadMs}
-        durationMs={timeline.durationMs}
-        playbackSpeed={playbackSpeed}
-        onSpeedChange={setPlaybackSpeed}
-        zoom={zoom}
-        onZoomChange={setZoom}
-        snapEnabled={snapEnabled}
-        onSnapChange={setSnapEnabled}
-      />
-
-      {/* 편집 도구: 참조 사이트처럼 아이콘+마우스오버 툴팁으로 표시(§5.5 disclosure). 호흡구간(ms)/목표
-          길이(초)처럼 수치 입력이 필요한 두 기능만 아이콘 옆에 축소된 select/input을 그대로 둔다. */}
+      {/* 재생 툴바(좌)와 편집 도구 아이콘(중앙)을 한 줄에 배치(참조 사이트 레이아웃). 호흡구간(ms)/목표
+          길이처럼 수치 입력이 필요한 두 기능은 아이콘 클릭 시 인라인으로 확장되어 나타난다. */}
       <TooltipProvider delayDuration={200}>
-        <div className="flex flex-wrap items-center gap-1.5 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
-          <IconToolbarButton icon={Undo2} label="실행 취소 (Ctrl+Z)" onClick={handleUndo} disabled={history.length === 0} />
-          <IconToolbarButton icon={Redo2} label="다시 실행 (Ctrl+Y)" onClick={handleRedo} disabled={future.length === 0} />
+        <PlaybackToolbar
+          isPlaying={isPlaying}
+          onTogglePlay={togglePlay}
+          onSeekStart={() => seekTo(0)}
+          onSeekEnd={() => seekTo(timeline.durationMs)}
+          playheadMs={playheadMs}
+          durationMs={timeline.durationMs}
+          playbackSpeed={playbackSpeed}
+          onSpeedChange={setPlaybackSpeed}
+          zoom={zoom}
+          onZoomChange={setZoom}
+          snapEnabled={snapEnabled}
+          onSnapChange={setSnapEnabled}
+          editTools={
+            <>
+              <IconToolbarButton icon={Undo2} label="실행 취소 (Ctrl+Z)" onClick={handleUndo} disabled={history.length === 0} />
+              <IconToolbarButton icon={Redo2} label="다시 실행 (Ctrl+Y)" onClick={handleRedo} disabled={future.length === 0} />
 
-          <span className="mx-1 text-white/20">|</span>
+              <span className="mx-1 text-white/20">|</span>
 
-          <IconToolbarButton icon={SplitSquareHorizontal} label="분할 (S, 재생헤드 위치)" onClick={handleSplit} disabled={!canSplit} />
-          <IconToolbarButton icon={Scissors} label="잘라내기 (Ctrl+X)" onClick={handleCut} />
-          <IconToolbarButton icon={Copy} label="복사 (Ctrl+C)" onClick={handleCopy} />
-          <IconToolbarButton icon={ClipboardPaste} label="붙여넣기 (Ctrl+V)" onClick={handlePaste} />
-          <IconToolbarButton icon={CopyPlus} label="복제 (Ctrl+D)" onClick={handleDuplicateSelected} />
-          <IconToolbarButton icon={Trash2} label="삭제 (Delete)" onClick={handleDeleteClip} destructive />
+              <IconToolbarButton icon={SplitSquareHorizontal} label="분할 (S, 재생헤드 위치)" onClick={handleSplit} disabled={!canSplit} />
+              <IconToolbarButton icon={Scissors} label="잘라내기 (Ctrl+X)" onClick={handleCut} />
+              <IconToolbarButton icon={Copy} label="복사 (Ctrl+C)" onClick={handleCopy} />
+              <IconToolbarButton icon={ClipboardPaste} label="붙여넣기 (Ctrl+V)" onClick={handlePaste} />
+              <IconToolbarButton icon={CopyPlus} label="복제 (Ctrl+D)" onClick={handleDuplicateSelected} />
+              <IconToolbarButton icon={Trash2} label="삭제 (Delete)" onClick={handleDeleteClip} destructive />
 
-          <span className="mx-1 text-white/20">|</span>
+              <span className="mx-1 text-white/20">|</span>
 
-          <IconToolbarButton
-            icon={List}
-            label="트랙 갭 제거 — 선택한 클립이 속한 트랙의 모든 갭을 제거"
-            onClick={handleRemoveTrackGaps}
-            disabled={!selected}
-          />
-          <IconToolbarButton
-            icon={FoldHorizontal}
-            label="선택 사이 갭 제거 — Ctrl+클릭으로 2개 이상 선택 후 사용"
-            onClick={handleRemoveGapsBetweenSelected}
-            disabled={multiSelectedIds.size < 2}
-          />
+              <IconToolbarButton
+                icon={List}
+                label="트랙 갭 제거 — 선택한 클립이 속한 트랙의 모든 갭을 제거"
+                onClick={handleRemoveTrackGaps}
+                disabled={!selected}
+              />
+              <IconToolbarButton
+                icon={FoldHorizontal}
+                label="선택 사이 갭 제거 — Ctrl+클릭으로 2개 이상 선택 후 사용"
+                onClick={handleRemoveGapsBetweenSelected}
+                disabled={multiSelectedIds.size < 2}
+              />
 
-          <span className="mx-1 text-white/20">|</span>
+              <span className="mx-1 text-white/20">|</span>
 
-          <div className="flex items-center gap-1">
-            <IconToolbarButton
-              icon={Wind}
-              label="TTS 전체에 호흡구간 추가"
-              onClick={() => setOpenInlineEditor(openInlineEditor === "breathing" ? null : "breathing")}
-            />
-            {openInlineEditor === "breathing" && (
-              <>
-                <span>호흡:</span>
-                <select
-                  className="rounded border border-white/20 bg-white/5 px-1 py-1 text-white"
-                  value={breathingGapMs}
-                  onChange={(e) => setBreathingGapMs(Number(e.target.value))}
-                >
-                  {[100, 150, 200, 250, 300, 350, 400, 450, 500].map((ms) => (
-                    <option key={ms} value={ms}>
-                      {(ms / 1000).toFixed(2)}초
-                    </option>
-                  ))}
-                </select>
-                <IconToolbarButton icon={Check} label="적용" onClick={handleAddBreathingGaps} />
-                <IconToolbarButton icon={X} label="취소" onClick={() => setOpenInlineEditor(null)} />
-              </>
-            )}
-          </div>
-
-          <span className="mx-1 text-white/20">|</span>
-
-          <div className="flex items-center gap-1">
-            <IconToolbarButton
-              icon={Scale}
-              label="선택한 클립이 속한 트랙 전체를 목표 길이에 맞춰 비례 조정"
-              onClick={() => {
-                setTargetLengthDraft(formatMmSsMs(targetLengthMs));
-                setOpenInlineEditor(openInlineEditor === "scale" ? null : "scale");
-              }}
-              disabled={!selected}
-            />
-            {openInlineEditor === "scale" && (
-              <>
-                <span>목표:</span>
-                <input
-                  type="text"
-                  className="w-24 rounded border border-white/20 bg-white/5 px-1.5 py-1 font-mono text-white"
-                  value={targetLengthDraft}
-                  onChange={(e) => setTargetLengthDraft(e.target.value)}
-                />
-                <span className="text-white/40">mm:ss.ms (최대 {formatMmSsMs(MAX_TARGET_LENGTH_MS)})</span>
+              <div className="flex items-center gap-1">
                 <IconToolbarButton
-                  icon={Check}
-                  label="적용"
-                  onClick={() => {
-                    const parsed = parseMmSsMs(targetLengthDraft);
-                    if (parsed === null) return;
-                    const clamped = Math.min(Math.max(parsed, 100), MAX_TARGET_LENGTH_MS);
-                    setTargetLengthMs(clamped);
-                    handleScaleTrack(clamped);
-                  }}
+                  icon={Wind}
+                  label="TTS 전체에 호흡구간 추가"
+                  onClick={() => setOpenInlineEditor(openInlineEditor === "breathing" ? null : "breathing")}
                 />
-                <IconToolbarButton icon={X} label="취소" onClick={() => setOpenInlineEditor(null)} />
-              </>
-            )}
-          </div>
-        </div>
+                {openInlineEditor === "breathing" && (
+                  <>
+                    <span>호흡:</span>
+                    <select
+                      className="rounded border border-white/20 bg-white/5 px-1 py-1 text-white"
+                      value={breathingGapMs}
+                      onChange={(e) => setBreathingGapMs(Number(e.target.value))}
+                    >
+                      {[100, 150, 200, 250, 300, 350, 400, 450, 500].map((ms) => (
+                        <option key={ms} value={ms}>
+                          {(ms / 1000).toFixed(2)}초
+                        </option>
+                      ))}
+                    </select>
+                    <IconToolbarButton icon={Check} label="적용" onClick={handleAddBreathingGaps} />
+                    <IconToolbarButton icon={X} label="취소" onClick={() => setOpenInlineEditor(null)} />
+                  </>
+                )}
+              </div>
+
+              <span className="mx-1 text-white/20">|</span>
+
+              <div className="flex items-center gap-1">
+                <IconToolbarButton
+                  icon={Scale}
+                  label="선택한 클립이 속한 트랙 전체를 목표 길이에 맞춰 비례 조정"
+                  onClick={() => {
+                    setTargetLengthDraft(formatMmSsMs(targetLengthMs));
+                    setOpenInlineEditor(openInlineEditor === "scale" ? null : "scale");
+                  }}
+                  disabled={!selected}
+                />
+                {openInlineEditor === "scale" && (
+                  <>
+                    <span>목표:</span>
+                    <input
+                      type="text"
+                      className="w-24 rounded border border-white/20 bg-white/5 px-1.5 py-1 font-mono text-white"
+                      value={targetLengthDraft}
+                      onChange={(e) => setTargetLengthDraft(e.target.value)}
+                    />
+                    <span className="text-white/40">mm:ss.ms (최대 {formatMmSsMs(MAX_TARGET_LENGTH_MS)})</span>
+                    <IconToolbarButton
+                      icon={Check}
+                      label="적용"
+                      onClick={() => {
+                        const parsed = parseMmSsMs(targetLengthDraft);
+                        if (parsed === null) return;
+                        const clamped = Math.min(Math.max(parsed, 100), MAX_TARGET_LENGTH_MS);
+                        setTargetLengthMs(clamped);
+                        handleScaleTrack(clamped);
+                      }}
+                    />
+                    <IconToolbarButton icon={X} label="취소" onClick={() => setOpenInlineEditor(null)} />
+                  </>
+                )}
+              </div>
+            </>
+          }
+        />
       </TooltipProvider>
 
       <TimelineTracks
