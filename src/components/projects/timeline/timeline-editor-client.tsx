@@ -86,6 +86,9 @@ const OUTLINE_BTN = "border-white/20 bg-white/5 text-white hover:bg-white/10 hov
 const OUTLINE_BTN_DISABLED = "border-white/10 bg-white/5 text-white/30 hover:bg-white/5 hover:text-white/30";
 // "목표 길이 맞추기" 최대값 — 유효성 검사 패널에 이미 안내된 최종 렌더링 길이 제한(1800초)과 동일하게 맞춘다.
 const MAX_TARGET_LENGTH_MS = 1_800_000;
+// 타임라인 줌(스케일) 범위 — 기본 100%, 최소 30%, 최대 500%.
+const ZOOM_MIN = 30;
+const ZOOM_MAX = 500;
 
 // 실행취소/다시실행 스냅샷: 클립의 시간뿐 아니라 payload까지 통째로 담아, 삭제/생성 같은
 // "클립 목록 자체가 바뀌는" 조작도 되돌릴 수 있게 한다(§1.3 disclosure — 되돌리기는 서버의
@@ -267,6 +270,7 @@ function PlaybackToolbar({
   snapEnabled,
   onSnapChange,
   editTools,
+  showSpeedAndZoom = true,
 }: {
   isPlaying: boolean;
   onTogglePlay: () => void;
@@ -282,6 +286,9 @@ function PlaybackToolbar({
   onSnapChange: (v: boolean) => void;
   // 참조 사이트처럼 재생 툴바(좌)와 편집 도구 아이콘(중앙)을 한 줄에 배치할 때만 전달한다.
   editTools?: React.ReactNode;
+  // 속도/줌 슬라이더는 화면 맨 위 툴바에만 두고, 타임라인 트랙 바로 위 툴바(editTools와 함께 쓰는 쪽)에서는
+  // 감춘다 — 아이콘까지 함께 있으면 좁은 화면에서 배치가 찌그러지기 때문(기본값 true).
+  showSpeedAndZoom?: boolean;
 }) {
   const playbackControls = (
     <div className="flex items-center gap-2 text-sm">
@@ -299,27 +306,38 @@ function PlaybackToolbar({
 
   const rightControls = (
     <>
-      <div className="flex items-center gap-1.5">
-        <span>속도</span>
-        <Slider
-          className="w-20"
-          value={[playbackSpeed]}
-          onValueChange={([v]) => onSpeedChange(v)}
-          min={0.1}
-          max={4}
-          step={0.1}
-        />
-        <span className="w-9 shrink-0">{playbackSpeed.toFixed(1)}x</span>
-      </div>
+      {showSpeedAndZoom && (
+        <div className="flex items-center gap-1.5">
+          <span>속도</span>
+          <Slider
+            className="w-20"
+            value={[playbackSpeed]}
+            onValueChange={([v]) => onSpeedChange(v)}
+            min={0.1}
+            max={4}
+            step={0.1}
+          />
+          <span className="w-9 shrink-0">{playbackSpeed.toFixed(1)}x</span>
+        </div>
+      )}
       <span className="shrink-0">
         {(playheadMs / 1000).toFixed(2)}s / {(durationMs / 1000).toFixed(2)}s
       </span>
-      <div className="flex items-center gap-1.5">
-        <ZoomOut className="size-3.5 text-white/40" />
-        <Slider className="w-20" value={[zoom]} onValueChange={([v]) => onZoomChange(v)} min={1} max={100} step={1} />
-        <ZoomIn className="size-3.5 text-white/40" />
-        <span className="w-9 shrink-0">{zoom}%</span>
-      </div>
+      {showSpeedAndZoom && (
+        <div className="flex items-center gap-1.5">
+          <ZoomOut className="size-3.5 text-white/40" />
+          <Slider
+            className="w-20"
+            value={[zoom]}
+            onValueChange={([v]) => onZoomChange(v)}
+            min={ZOOM_MIN}
+            max={ZOOM_MAX}
+            step={1}
+          />
+          <ZoomIn className="size-3.5 text-white/40" />
+          <span className="w-9 shrink-0">{zoom}%</span>
+        </div>
+      )}
       <span className={cn("shrink-0 rounded-full bg-white/5 px-2 py-0.5", !editTools && "ml-auto")}>
         ⓘ Preview Mode — 애니메이션/전환효과는 렌더링 후 확인
       </span>
@@ -1462,11 +1480,11 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                 <div>
                   <p className="mb-1 font-medium">줌 레벨</p>
                   <div className="flex items-center gap-2">
-                    <Slider value={[zoom]} onValueChange={([v]) => setZoom(v)} min={1} max={100} step={1} />
+                    <Slider value={[zoom]} onValueChange={([v]) => setZoom(v)} min={ZOOM_MIN} max={ZOOM_MAX} step={1} />
                     <span className="w-12 shrink-0 text-white/50">{zoom}%</span>
                   </div>
                   <div className="mt-1 flex gap-1">
-                    {[10, 25, 50, 100].map((preset) => (
+                    {[30, 100, 250, 500].map((preset) => (
                       <Button
                         key={preset}
                         size="sm"
@@ -1513,6 +1531,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
           onZoomChange={setZoom}
           snapEnabled={snapEnabled}
           onSnapChange={setSnapEnabled}
+          showSpeedAndZoom={false}
           editTools={
             <>
               <IconToolbarButton icon={Undo2} label="실행 취소 (Ctrl+Z)" onClick={handleUndo} disabled={history.length === 0} />
