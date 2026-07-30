@@ -24,9 +24,11 @@ import {
   type PersistedTimelineClip,
   type TimelineTrackType,
   type TimelineValidationResult,
+  type VideoClipMask,
 } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
 import { resolveVideoResolution } from "@/lib/video";
+import { MaskOverlay } from "@/components/projects/timeline/mask-overlay";
 import type { BgmSettings, EffectiveBgmSettings, SerializedProject, SerializedVideoAsset } from "@/types/project";
 
 type LeftTab = "script" | "subtitle" | "preview" | "final";
@@ -292,6 +294,8 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
 
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [multiSelectedIds, setMultiSelectedIds] = useState<Set<string>>(new Set());
+  // 이미지 속성 패널의 "마스크" 서브탭이 열려 있는 동안에만 미리보기 화면에 드래그 편집 오버레이를 그린다.
+  const [maskTabActive, setMaskTabActive] = useState(false);
   const clipboardRef = useRef<{ trackId: string; payload: PersistedClipPayload; durationMs: number }[]>([]);
   const [breathingGapMs, setBreathingGapMs] = useState(300);
   const [targetLengthSec, setTargetLengthSec] = useState(60);
@@ -431,6 +435,10 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     } else {
       setSelectedClipId(clipId);
       setMultiSelectedIds(new Set([clipId]));
+      // 선택한 클립이 미리보기 탭에 실제로 표시되도록 재생헤드를 클립 시작 시각으로 이동한다.
+      // (미리보기는 재생헤드 기준으로 그려지므로, 이 이동이 없으면 선택한 클립과 무관한 화면이 보일 수 있다.)
+      const found = findClip(timeline, clipId);
+      if (found) seekTo(found.clip.startMs);
     }
   }
 
@@ -612,6 +620,20 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     },
     [projectId, fetchAll],
   );
+
+  // 미리보기 화면의 마스크 드래그 편집(MaskOverlay)에서 오는 전체 마스크 객체를 저장한다.
+  // (마스크 API는 부분 patch가 아닌 전체 객체 교체를 기대함 — MaskTab 슬라이더와 동일한 방식.)
+  async function handleMaskPatch(clipId: string, mask: NonNullable<VideoClipMask>) {
+    const res = await fetch(`/api/projects/${projectId}/timeline/clips/${clipId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mask }),
+    });
+    if (res.ok) {
+      const updated = await res.json();
+      setTimeline((prev) => (prev ? patchClipInTimeline(prev, clipId, { payload: updated.payload }) : prev));
+    }
+  }
 
   const handleUndo = useCallback(async () => {
     if (history.length === 0) return;
@@ -1179,6 +1201,18 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                     {previewSubtitleClip.payload.text}
                   </p>
                 )}
+                {maskTabActive &&
+                  selected?.track.type === "IMAGE" &&
+                  previewImageClip?.id === selected.clip.id &&
+                  previewImageClip.payload.mask && (
+                    <MaskOverlay
+                      clipId={previewImageClip.id}
+                      mask={previewImageClip.payload.mask}
+                      containerWidthPx={videoResolution.width * previewScale}
+                      containerHeightPx={videoResolution.height * previewScale}
+                      onPatch={(mask) => handleMaskPatch(previewImageClip.id, mask)}
+                    />
+                  )}
               </div>
             </div>
           )}
@@ -1292,6 +1326,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                 onCommitTiming={commitClipTiming}
                 onPatched={(payload) => setTimeline((prev) => (prev ? patchClipInTimeline(prev, selected.clip.id, { payload }) : prev))}
                 onRefetchAll={fetchAll}
+                onMaskTabActiveChange={setMaskTabActive}
               />
             ) : selected ? (
               <div className="space-y-2">

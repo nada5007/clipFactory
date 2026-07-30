@@ -139,6 +139,9 @@ type Props = {
   onCommitTiming: (clipId: string, startMs: number, endMs: number) => void;
   onPatched: (payload: PersistedTimelineClip["payload"]) => void;
   onRefetchAll: () => void;
+  // 미리보기 화면의 마스크 드래그 편집 오버레이 표시 여부를 부모(타임라인 에디터)에 알리기 위한 콜백.
+  // "마스크" 서브탭이 열려 있을 때만 미리보기에 점선 핸들 오버레이를 그린다.
+  onMaskTabActiveChange?: (active: boolean) => void;
 };
 
 // 자막/비디오/이미지 클립 선택 시 서브탭 속성 패널(§5.2). 다른 클립 타입(TTS/BGM/비디오오디오/효과음)은
@@ -519,10 +522,15 @@ function MediaClipProperties({
   onDelete,
   onCommitTiming,
   onPatched,
+  onMaskTabActiveChange,
 }: Props & { kind: "video" | "image" }) {
   type MediaTab = "basic" | "transform" | "effects" | "transition" | "keyframes" | "special" | "options" | "mask";
   const [tab, setTab] = useState<MediaTab>("basic");
   useEffect(() => setTab("basic"), [clip.id]);
+  useEffect(() => {
+    onMaskTabActiveChange?.(tab === "mask");
+    return () => onMaskTabActiveChange?.(false);
+  }, [tab, onMaskTabActiveChange]);
 
   const sameTrackSelected = selectedClips.filter((c) => c.trackId === clip.trackId);
   const batchMode = sameTrackSelected.length > 1;
