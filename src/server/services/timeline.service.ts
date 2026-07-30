@@ -226,11 +226,33 @@ export async function updateClipText(clipId: string, text: string) {
   });
 }
 
-// 실행 취소/다시 실행: 클라이언트가 들고 있는 스냅샷으로 여러 클립의 시간을 한 번에 되돌린다.
-export async function bulkRestoreClipTimings(updates: { id: string; startMs: number; endMs: number }[]) {
-  await prisma.$transaction(
-    updates.map((u) => prisma.timelineClip.update({ where: { id: u.id }, data: { startMs: u.startMs, endMs: u.endMs } })),
-  );
+// 실행 취소/다시 실행: 클라이언트가 들고 있는 "그 시점 전체 클립 목록" 스냅샷으로 되돌린다.
+// 스냅샷에 없는(그 뒤에 새로 생긴) 클립은 삭제하고, 스냅샷에 있는데 지금 없는(그 뒤에 삭제된) 클립은
+// 원래 id 그대로 재생성하며, 남아있는 클립은 시간/payload를 스냅샷 값으로 되돌린다.
+export async function restoreClipsSnapshot(
+  snapshot: { id: string; trackId: string; startMs: number; endMs: number; payload: PersistedClipPayload }[],
+) {
+  const trackIds = Array.from(new Set(snapshot.map((s) => s.trackId)));
+  const current = await prisma.timelineClip.findMany({ where: { trackId: { in: trackIds } } });
+  const snapshotIds = new Set(snapshot.map((s) => s.id));
+  const toDeleteIds = current.filter((c) => !snapshotIds.has(c.id)).map((c) => c.id);
+
+  await prisma.$transaction([
+    ...(toDeleteIds.length > 0 ? [prisma.timelineClip.deleteMany({ where: { id: { in: toDeleteIds } } })] : []),
+    ...snapshot.map((s) =>
+      prisma.timelineClip.upsert({
+        where: { id: s.id },
+        create: {
+          id: s.id,
+          trackId: s.trackId,
+          startMs: s.startMs,
+          endMs: s.endMs,
+          payload: s.payload as Prisma.InputJsonValue,
+        },
+        update: { startMs: s.startMs, endMs: s.endMs, payload: s.payload as Prisma.InputJsonValue },
+      }),
+    ),
+  ]);
 }
 
 export async function splitClip(clipId: string, atMs: number) {

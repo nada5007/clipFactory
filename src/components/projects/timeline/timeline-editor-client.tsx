@@ -63,24 +63,15 @@ const RIGHT_PANEL_MAX_WIDTH = 560;
 const OUTLINE_BTN = "border-white/20 bg-white/5 text-white hover:bg-white/10 hover:text-white";
 const OUTLINE_BTN_DISABLED = "border-white/10 bg-white/5 text-white/30 hover:bg-white/5 hover:text-white/30";
 
-type TimingSnapshot = { id: string; startMs: number; endMs: number }[];
+// 실행취소/다시실행 스냅샷: 클립의 시간뿐 아니라 payload까지 통째로 담아, 삭제/생성 같은
+// "클립 목록 자체가 바뀌는" 조작도 되돌릴 수 있게 한다(§1.3 disclosure — 되돌리기는 서버의
+// restoreClipsSnapshot이 수행하고, 여기서는 히스토리 스택에 넣을 스냅샷만 만든다).
+type ClipSnapshot = { id: string; trackId: string; startMs: number; endMs: number; payload: PersistedClipPayload }[];
 
-function snapshotTimings(timeline: PersistedTimeline): TimingSnapshot {
-  return timeline.tracks.flatMap((t) => t.clips.map((c) => ({ id: c.id, startMs: c.startMs, endMs: c.endMs })));
-}
-
-function applySnapshot(timeline: PersistedTimeline, snapshot: TimingSnapshot): PersistedTimeline {
-  const byId = new Map(snapshot.map((s) => [s.id, s]));
-  return {
-    ...timeline,
-    tracks: timeline.tracks.map((t) => ({
-      ...t,
-      clips: t.clips.map((c) => {
-        const s = byId.get(c.id);
-        return s ? { ...c, startMs: s.startMs, endMs: s.endMs } : c;
-      }),
-    })),
-  };
+function snapshotClips(timeline: PersistedTimeline): ClipSnapshot {
+  return timeline.tracks.flatMap((t) =>
+    t.clips.map((c) => ({ id: c.id, trackId: t.id, startMs: c.startMs, endMs: c.endMs, payload: c.payload })),
+  );
 }
 
 function patchClipInTimeline(
@@ -302,8 +293,8 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const [breathingGapMs, setBreathingGapMs] = useState(300);
   const [targetLengthSec, setTargetLengthSec] = useState(60);
   const [playheadMs, setPlayheadMs] = useState(0);
-  const [history, setHistory] = useState<TimingSnapshot[]>([]);
-  const [future, setFuture] = useState<TimingSnapshot[]>([]);
+  const [history, setHistory] = useState<ClipSnapshot[]>([]);
+  const [future, setFuture] = useState<ClipSnapshot[]>([]);
 
   // 실제 재생 엔진: TTS 클립을 순서대로 이어 재생하고 BGM을 동시에 재생한다.
   const [isPlaying, setIsPlaying] = useState(false);
@@ -594,12 +585,21 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     if (timeline) setValidation(validateTimeline(timeline));
   }
 
+  // 클립 목록 자체가 바뀌는 조작(삭제/붙여넣기/복제/분할/갭 제거 등) 앞에서 호출해 실행취소 스택에
+  // "그 시점 전체 클립 목록"을 남긴다. 이 함수는 useCallback으로 감싸지 않은 일반 핸들러들에서만
+  // 쓰므로, 매 렌더의 최신 timeline 클로저를 그대로 참조해도 안전하다.
+  function pushHistory() {
+    if (!timeline) return;
+    setHistory((h) => [...h, snapshotClips(timeline)]);
+    setFuture([]);
+  }
+
   // 드래그/트림(타이밍 변경)은 실행취소 대상이므로 커밋 전에 현재 상태를 히스토리에 남긴다.
   const commitClipTiming = useCallback(
     async (clipId: string, startMs: number, endMs: number) => {
       setTimeline((prev) => {
         if (!prev) return prev;
-        setHistory((h) => [...h, snapshotTimings(prev)]);
+        setHistory((h) => [...h, snapshotClips(prev)]);
         setFuture([]);
         return patchClipInTimeline(prev, clipId, { startMs, endMs });
       });
@@ -639,36 +639,30 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   }
 
   const handleUndo = useCallback(async () => {
-    if (history.length === 0) return;
+    if (history.length === 0 || !timeline) return;
     const prevSnapshot = history[history.length - 1];
-    setTimeline((prev) => {
-      if (!prev) return prev;
-      setFuture((f) => [...f, snapshotTimings(prev)]);
-      return applySnapshot(prev, prevSnapshot);
-    });
+    setFuture((f) => [...f, snapshotClips(timeline)]);
     setHistory((h) => h.slice(0, -1));
-    await fetch(`/api/projects/${projectId}/timeline/clips/bulk`, {
+    await fetch(`/api/projects/${projectId}/timeline/clips/snapshot`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ updates: prevSnapshot }),
+      body: JSON.stringify({ clips: prevSnapshot }),
     });
-  }, [history, projectId]);
+    await fetchAll();
+  }, [history, timeline, projectId, fetchAll]);
 
   const handleRedo = useCallback(async () => {
-    if (future.length === 0) return;
+    if (future.length === 0 || !timeline) return;
     const nextSnapshot = future[future.length - 1];
-    setTimeline((prev) => {
-      if (!prev) return prev;
-      setHistory((h) => [...h, snapshotTimings(prev)]);
-      return applySnapshot(prev, nextSnapshot);
-    });
+    setHistory((h) => [...h, snapshotClips(timeline)]);
     setFuture((f) => f.slice(0, -1));
-    await fetch(`/api/projects/${projectId}/timeline/clips/bulk`, {
+    await fetch(`/api/projects/${projectId}/timeline/clips/snapshot`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ updates: nextSnapshot }),
+      body: JSON.stringify({ clips: nextSnapshot }),
     });
-  }, [future, projectId]);
+    await fetchAll();
+  }, [future, timeline, projectId, fetchAll]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -722,14 +716,13 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
 
   async function handleSplit() {
     if (!selected || !canSplit) return;
+    pushHistory();
     const res = await fetch(`/api/projects/${projectId}/timeline/clips/${selected.clip.id}/split`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ atMs: playheadMs }),
     });
     if (res.ok) {
-      setHistory([]);
-      setFuture([]);
       setSelectedClipId(null);
       setMultiSelectedIds(new Set());
       await fetchAll();
@@ -747,14 +740,13 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   async function handleDeleteClip() {
     const ids = currentSelectionIds();
     if (ids.length === 0) return;
+    pushHistory();
     const res = await fetch(`/api/projects/${projectId}/timeline/clips/bulk`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),
     });
     if (res.ok) {
-      setHistory([]);
-      setFuture([]);
       setSelectedClipId(null);
       setMultiSelectedIds(new Set());
       await fetchAll();
@@ -787,6 +779,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   async function handlePaste() {
     const items = clipboardRef.current;
     if (items.length === 0) return;
+    pushHistory();
     const byTrack = new Map<string, { payload: PersistedClipPayload; durationMs: number }[]>();
     for (const item of items) {
       const arr = byTrack.get(item.trackId) ?? [];
@@ -800,31 +793,27 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
         body: JSON.stringify({ atMs: playheadMs, items: group }),
       });
     }
-    setHistory([]);
-    setFuture([]);
     await fetchAll();
   }
 
   async function handleDuplicateSelected() {
     const ids = currentSelectionIds();
     if (ids.length === 0) return;
+    pushHistory();
     let lastError: string | null = null;
     for (const id of ids) {
       const res = await fetch(`/api/projects/${projectId}/timeline/clips/${id}/duplicate`, { method: "POST" });
       if (!res.ok) lastError = (await res.json().catch(() => null))?.error ?? "복제에 실패했습니다.";
     }
-    setHistory([]);
-    setFuture([]);
     await fetchAll();
     if (lastError) setError(lastError);
   }
 
   async function handleRemoveTrackGaps() {
     if (!selected) return;
+    pushHistory();
     const res = await fetch(`/api/projects/${projectId}/timeline/tracks/${selected.track.id}/remove-gaps`, { method: "POST" });
     if (res.ok) {
-      setHistory([]);
-      setFuture([]);
       await fetchAll();
     } else {
       setError((await res.json().catch(() => null))?.error ?? "갭 제거에 실패했습니다.");
@@ -833,14 +822,13 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
 
   async function handleRemoveGapsBetweenSelected() {
     if (multiSelectedIds.size < 2) return;
+    pushHistory();
     const res = await fetch(`/api/projects/${projectId}/timeline/clips/remove-gaps-between`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids: Array.from(multiSelectedIds) }),
     });
     if (res.ok) {
-      setHistory([]);
-      setFuture([]);
       await fetchAll();
     } else {
       setError((await res.json().catch(() => null))?.error ?? "갭 제거에 실패했습니다.");
@@ -848,6 +836,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   }
 
   async function handleAddBreathingGaps() {
+    pushHistory();
     const res = await fetch(`/api/projects/${projectId}/timeline/tts-breathing-gaps`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -855,8 +844,6 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     });
     if (res.ok) {
       setTimeline(await res.json());
-      setHistory([]);
-      setFuture([]);
     } else {
       setError((await res.json().catch(() => null))?.error ?? "호흡구간 추가에 실패했습니다.");
     }
@@ -864,14 +851,13 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
 
   async function handleScaleTrack() {
     if (!selected) return;
+    pushHistory();
     const res = await fetch(`/api/projects/${projectId}/timeline/tracks/${selected.track.id}/scale-to-duration`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ targetDurationMs: Math.round(targetLengthSec * 1000) }),
     });
     if (res.ok) {
-      setHistory([]);
-      setFuture([]);
       await fetchAll();
     } else {
       setError((await res.json().catch(() => null))?.error ?? "길이 조정에 실패했습니다.");

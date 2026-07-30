@@ -1,17 +1,18 @@
 import { describe, expect, it } from "vitest";
 
+import type { PersistedClipPayload } from "@/lib/timeline";
 import { prisma } from "@/lib/prisma";
 import {
   addTtsBreathingGaps,
   applySubtitleLineLengthFix,
   bulkDeleteClips,
-  bulkRestoreClipTimings,
   deleteClip,
   duplicateClip,
   getOrSyncTimeline,
   pasteClips,
   removeGapsBetweenClips,
   removeTrackGaps,
+  restoreClipsSnapshot,
   scaleTrackToTargetDuration,
   splitClip,
   syncTimeline,
@@ -164,7 +165,7 @@ describe("updateClipTiming", () => {
   });
 });
 
-describe("splitClip / deleteClip / bulkRestoreClipTimings", () => {
+describe("splitClip / deleteClip / restoreClipsSnapshot", () => {
   it("클립을 지정 시점에서 둘로 나눈다", async () => {
     const { channel, project } = await createTestProject({
       segments: [{ order: 0, text: "긴 문장", startMs: 0, endMs: 4000 }],
@@ -226,15 +227,61 @@ describe("splitClip / deleteClip / bulkRestoreClipTimings", () => {
     try {
       const timeline = await getOrSyncTimeline(project.id);
       const clips = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips;
-      const snapshot = clips.map((c) => ({ id: c.id, startMs: c.startMs, endMs: c.endMs }));
+      const snapshot = clips.map((c) => ({ id: c.id, trackId: c.trackId, startMs: c.startMs, endMs: c.endMs, payload: c.payload as unknown as PersistedClipPayload }));
 
       await updateClipTiming(clips[0].id, { startMs: 100, endMs: 100 + (clips[0].endMs - clips[0].startMs) });
 
-      await bulkRestoreClipTimings(snapshot);
+      await restoreClipsSnapshot(snapshot);
 
       const restored = await prisma.timelineClip.findUniqueOrThrow({ where: { id: clips[0].id } });
       expect(restored.startMs).toBe(snapshot[0].startMs);
       expect(restored.endMs).toBe(snapshot[0].endMs);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("스냅샷 시점에 존재하던(그 뒤 삭제된) 클립을 원래 id로 재생성한다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [{ order: 0, text: "첫 문장", startMs: 0, endMs: 1000 }],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const clip = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips[0];
+      const snapshot = [{ id: clip.id, trackId: clip.trackId, startMs: clip.startMs, endMs: clip.endMs, payload: clip.payload as unknown as PersistedClipPayload }];
+
+      await deleteClip(clip.id);
+      expect(await prisma.timelineClip.findUnique({ where: { id: clip.id } })).toBeNull();
+
+      await restoreClipsSnapshot(snapshot);
+
+      const restored = await prisma.timelineClip.findUniqueOrThrow({ where: { id: clip.id } });
+      expect(restored).toMatchObject({ trackId: clip.trackId, startMs: clip.startMs, endMs: clip.endMs });
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("스냅샷 시점 이후에 새로 생긴 클립은 되돌릴 때 제거한다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [{ order: 0, text: "긴 문장", startMs: 0, endMs: 4000 }],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const clip = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips[0];
+      const snapshot = [{ id: clip.id, trackId: clip.trackId, startMs: clip.startMs, endMs: clip.endMs, payload: clip.payload as unknown as PersistedClipPayload }];
+
+      const { created } = await splitClip(clip.id, 1500);
+      expect(await prisma.timelineClip.findUnique({ where: { id: created.id } })).not.toBeNull();
+
+      await restoreClipsSnapshot(snapshot);
+
+      expect(await prisma.timelineClip.findUnique({ where: { id: created.id } })).toBeNull();
+      const remaining = await prisma.timelineClip.findMany({ where: { trackId: clip.trackId } });
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]).toMatchObject({ startMs: clip.startMs, endMs: clip.endMs });
     } finally {
       await cleanup(project.id, channel.id);
     }
