@@ -1102,13 +1102,59 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                 )}
               >
                 {previewImageClip?.payload.sourceId ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    key={previewImageClip.id}
-                    src={`/api/projects/${projectId}/images/${previewImageClip.payload.sourceId}/file`}
-                    alt=""
-                    className="size-full object-cover"
-                  />
+                  <>
+                    {previewImageClip.payload.mask && (
+                      <svg width="0" height="0" className="absolute">
+                        <defs>
+                          <mask
+                            id={`preview-mask-${previewImageClip.id}`}
+                            maskUnits="objectBoundingBox"
+                            maskContentUnits="objectBoundingBox"
+                          >
+                            <rect x={0} y={0} width={1} height={1} fill={previewImageClip.payload.mask.inverted ? "white" : "black"} />
+                            {previewImageClip.payload.mask.shape === "rect" ? (
+                              <rect
+                                x={previewImageClip.payload.mask.x - previewImageClip.payload.mask.width / 2}
+                                y={previewImageClip.payload.mask.y - previewImageClip.payload.mask.height / 2}
+                                width={previewImageClip.payload.mask.width}
+                                height={previewImageClip.payload.mask.height}
+                                rx={
+                                  (previewImageClip.payload.mask.roundnessPct / 100) *
+                                  (Math.min(previewImageClip.payload.mask.width, previewImageClip.payload.mask.height) / 2)
+                                }
+                                fill={previewImageClip.payload.mask.inverted ? "black" : "white"}
+                                transform={`rotate(${previewImageClip.payload.mask.rotationDeg} ${previewImageClip.payload.mask.x} ${previewImageClip.payload.mask.y})`}
+                              />
+                            ) : (
+                              <ellipse
+                                cx={previewImageClip.payload.mask.x}
+                                cy={previewImageClip.payload.mask.y}
+                                rx={previewImageClip.payload.mask.width / 2}
+                                ry={previewImageClip.payload.mask.height / 2}
+                                fill={previewImageClip.payload.mask.inverted ? "black" : "white"}
+                                transform={`rotate(${previewImageClip.payload.mask.rotationDeg} ${previewImageClip.payload.mask.x} ${previewImageClip.payload.mask.y})`}
+                              />
+                            )}
+                          </mask>
+                        </defs>
+                      </svg>
+                    )}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      key={previewImageClip.id}
+                      src={`/api/projects/${projectId}/images/${previewImageClip.payload.sourceId}/file`}
+                      alt=""
+                      className="size-full object-cover"
+                      style={
+                        previewImageClip.payload.mask
+                          ? {
+                              maskImage: `url(#preview-mask-${previewImageClip.id})`,
+                              WebkitMaskImage: `url(#preview-mask-${previewImageClip.id})`,
+                            }
+                          : undefined
+                      }
+                    />
+                  </>
                 ) : (
                   <div className="flex h-full items-center justify-center text-sm text-white/30">이미지 없음</div>
                 )}
