@@ -21,6 +21,7 @@ import {
   type PersistedClipPayload,
   type PersistedTimeline,
   type PersistedTimelineClip,
+  type TimelineTrackType,
   type TimelineValidationResult,
 } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
@@ -827,6 +828,49 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     }
   }
 
+  // "+ 트랙 추가": 자동 동기화되지 않는(autoSync=false) 새 트랙을 만든다. 아직 렌더링에는 연결되지 않는다.
+  async function handleAddTrack(type: TimelineTrackType) {
+    const res = await fetch(`/api/projects/${projectId}/timeline/tracks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type }),
+    });
+    if (res.ok) {
+      await fetchAll();
+    } else {
+      setError((await res.json().catch(() => null))?.error ?? "트랙 추가에 실패했습니다.");
+    }
+  }
+
+  async function handleRemoveTrack(trackId: string) {
+    const res = await fetch(`/api/projects/${projectId}/timeline/tracks/${trackId}`, { method: "DELETE" });
+    if (res.ok) {
+      if (selected?.track.id === trackId) {
+        setSelectedClipId(null);
+        setMultiSelectedIds(new Set());
+      }
+      await fetchAll();
+    } else {
+      setError((await res.json().catch(() => null))?.error ?? "트랙 삭제에 실패했습니다.");
+    }
+  }
+
+  // "클립 추가 > 직접 업로드": 현재 재생헤드 위치에 파일을 업로드해 클립을 만든다.
+  async function handleUploadToTrack(trackId: string, file: File) {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("atMs", String(playheadMs));
+    const res = await fetch(`/api/projects/${projectId}/timeline/tracks/${trackId}/upload`, {
+      method: "POST",
+      body: form,
+    });
+    if (res.ok) {
+      await fetchAll();
+    } else {
+      setError((await res.json().catch(() => null))?.error ?? "업로드에 실패했습니다.");
+    }
+  }
+
   async function handleFixSubtitleLineLength() {
     const res = await fetch(`/api/projects/${projectId}/timeline/quality-fixes/subtitle-line-length`, {
       method: "POST",
@@ -1392,6 +1436,9 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
         onSelectClip={handleSelectClip}
         onSeek={seekTo}
         onCommitTiming={commitClipTiming}
+        onAddTrack={handleAddTrack}
+        onRemoveTrack={handleRemoveTrack}
+        onUploadToTrack={handleUploadToTrack}
       />
 
       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}

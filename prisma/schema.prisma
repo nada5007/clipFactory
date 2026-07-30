@@ -77,6 +77,7 @@ model Project {
   timeline      Timeline?
   jobs          Job[]
   uploadConfig  UploadConfig?
+  uploadedMedia UploadedMedia[]
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 }
@@ -173,6 +174,7 @@ enum TimelineTrackType {
   TTS
   AUDIO
   BGM
+  SFX
 }
 
 // UI_SPEC.md §5.6 데이터 모델. PROJECT_SPEC.md §1.3 "타임라인 편집기 Phase B":
@@ -197,11 +199,12 @@ model TimelineTrack {
   order      Int
   visible    Boolean           @default(true)
   locked     Boolean           @default(false)
+  // true: syncTimeline이 관리하는 자동 생성 트랙(타입당 최초 1개, 기존 동작). false: "트랙 추가"로
+  // 사용자가 직접 만든 트랙 — syncTimeline이 절대 만들거나 지우지 않는다.
+  autoSync   Boolean           @default(true)
   clips      TimelineClip[]
   createdAt  DateTime          @default(now())
   updatedAt  DateTime          @updatedAt
-
-  @@unique([timelineId, type])
 }
 
 model TimelineClip {
@@ -217,6 +220,19 @@ model TimelineClip {
   updatedAt DateTime      @updatedAt
 
   @@index([trackId])
+}
+
+// PROJECT_SPEC.md §1.3 "트랙/클립 추가 기능": "직접 업로드"로 타임라인 클립에 추가한 파일.
+// AudioSegment/ImageAsset처럼 자동 파이프라인이 만드는 게 아니라 사용자가 트랙에 직접 얹은 미디어라
+// 별도 모델로 관리한다. TimelineClip.payload.mediaId로 참조된다.
+model UploadedMedia {
+  id         String   @id @default(cuid())
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  kind       String // "video" | "image" | "audio"
+  filePath   String
+  durationMs Int? // 이미지는 고정 길이가 없어 null
+  createdAt  DateTime @default(now())
 }
 
 // PROJECT_SPEC.md §1.3 "BGM 설정": 프로젝트에 종속되지 않는 전역 BGM 라이브러리.

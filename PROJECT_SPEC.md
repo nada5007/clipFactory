@@ -246,7 +246,15 @@ model Project {
 5. **TTS 호흡구간 추가**: TTS/자막 트랙 전체에 클립 사이 지정 간격(0.1~0.5초 프리셋)을 균일하게 삽입, 이후 클립들을 뒤로 밀어낸다. TTS와 자막 클립은 동일한 순서 구조라 같은 방식으로 함께 밀어 싱크를 유지한다.
 6. **목표 길이 맞추기**: 선택한 트랙 전체를 입력한 목표 길이로 비례 확대/축소(각 클립의 startMs/endMs를 원점 기준으로 스케일). **주의(디스클로저 예정)**: TTS 트랙에 적용하면 클립 길이(=재생 시간)가 바뀌는데, 현재 렌더링은 오디오를 자르거나(축소) 무음으로 채우는(확대) 방식이라 실제 음성 속도가 변하지 않는다 — 배속 처리(atempo 필터)는 이번 범위 밖.
 
-**구현 완료 (2026-07-30)**: 1~6번 전부 구현·검증. 순수 함수(`removeGapsInClips`/`removeGapsBetweenSelectedClips`/`insertBreathingGaps`/`scaleClipsToTargetDuration`, `src/lib/timeline.ts`) + 서비스(`duplicateClip`/`pasteClips`/`bulkDeleteClips`/`removeTrackGaps`/`removeGapsBetweenClips`/`addTtsBreathingGaps`/`scaleTrackToTargetDuration`) + API 라우트 + UI(멀티 셀렉트 Ctrl+클릭, 클립보드 단축키, 편집 도구 툴바)까지 전 계층 실제 curl 검증 완료. **알려진 제약**: 복제/붙여넣기는 리플 삽입이 아니라 이웃 경계 클램프 방식이라, 동기화 직후처럼 클립이 빈틈없이 붙어있는 상태에서는 자리가 없어 실패한다(트림으로 먼저 공간을 만들어야 함) — 실제 curl 테스트로 이 동작을 확인함. "선택 클립 사이 갭만 제거"는 선택되지 않은 클립이 사이에 끼어있으면 겹칠 수 있음(문서화된 단순화).
+**구현 완료 (2026-07-30)**: 1~6번 전부 구현·검증. 순수 함수(`removeGapsInClips`/`removeGapsBetweenSelectedClips`/`insertBreathingGaps`/`scaleClipsToTargetDuration`, `src/lib/timeline.ts`) + 서비스(`duplicateClip`/`pasteClips`/`bulkDeleteClips`/`removeTrackGaps`/`removeGapsBetweenClips`/`addTtsBreathingGaps`/`scaleTrackToTargetDuration`) + API 라우트 + UI(멀티 셀렉트 Ctrl+클릭, 클립보드 단축키, 편집 도구 툴바)까지 전 계층 실제 curl 검증 완료. **알려진 제약**: 복제/붙여넣기는 리플 삽입이 아니라 이웃 경계 클램프 방식이라, 동기화 직후처럼 클립이 빈틈없이 붙어있는 상태에서는 자리가 없어 실패한다(트림으로 먼저 공간을 만들어야 함) — 실제 curl 테스트로 이 동작을 확인했다. "선택 클립 사이 갭만 제거"는 선택되지 않은 클립이 사이에 끼어있으면 겹칠 수 있음(문서화된 단순화).
+
+**타임라인 편집기 — 트랙 추가 + 클립 추가(업로드) (2026-07-30 "Proceed" 요청, §1.3 5·6번 완료)**: `TimelineTrack`의 `@@unique([timelineId, type])` 제약을 제거하고 `autoSync: Boolean` 필드를 추가해 다중 트랙을 지원하도록 스키마를 재구성(마이그레이션 `20260729234241_timeline_multi_track_and_uploads`). `TimelineTrackType`에 참조 사이트 트랙 메뉴에 있던 `SFX`(효과음)도 추가.
+
+1. **트랙 추가**: `+ 트랙 추가` 드롭다운(비디오/이미지/TTS/BGM/효과음/자막) — 새 트랙은 항상 `autoSync=false`로 생성되어 `syncTimeline`이 절대 만들거나 지우지 않는다. BGM은 참조 사이트와 동일하게 최대 2개(자동 1개+수동 1개)로 제한.
+2. **트랙 삭제**: `autoSync=false`인(사용자가 만든) 트랙만 삭제 가능 — 자동 트랙은 서비스 레이어에서 거부.
+3. **클립 추가(직접 업로드)**: 각 트랙 행의 `+` 버튼으로 파일 업로드 → 새 `UploadedMedia` 모델(video/image/audio, 프로젝트 스토리지의 `uploads/` 하위에 저장)에 저장하고, 현재 재생헤드 위치에 타임라인 클립 생성(`payload.mediaId`로 참조 — 자동 파이프라인의 `sourceId`와는 별도 개념). 파일 크기 제한: 비디오 500MB/이미지 10MB/오디오 50MB(참조 UI 캡처 기준). "AI 생성"/"무료 검색"/"릴박스 라이브러리" 경로는 §1.3 6번에서 이미 제외 확정한 대로 구현하지 않음 — 직접 업로드만.
+4. **실제 검증**: 실제 2초짜리 mp4를 curl로 VIDEO 트랙에 업로드 → 파일 저장·길이 자동 인식(ffprobe)·클립 생성·파일 서빙(`GET /api/projects/:id/media/:mediaId/file`)까지 확인. BGM 3번째 추가 시도 시 거부, 자동 트랙 삭제 시도 시 거부, 동기화(`syncTimeline`) 후에도 수동 트랙/클립이 그대로 보존되는 것까지 curl로 검증.
+5. **범위 제외(디스클로저)**: 여러 비디오/이미지 트랙을 실제로 합성해 최종 렌더링에 반영하는 것(레이어 합성·전환·마스크 적용)은 이번 라운드에 포함하지 않았다 — 이미 "비디오 속성 패널: 데이터만 준비, 렌더링 미연결"로 남긴 것과 동일한 패턴. VIDEO 클립이 실제로 존재하게 된 지금은 §5.2 비디오 속성 패널(변환/효과/전환/키프레임/마스크)을 실제로 열어볼 수 있지만, 그 값들이 최종 영상에 반영되려면 별도의 비디오 컴포지팅 엔진(ffmpeg overlay/chromakey 등)이 필요하며 이는 후속 라운드 과제로 남긴다.
 
 ### 1.4 API 엔드포인트 (초안)
 

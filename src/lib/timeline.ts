@@ -1,6 +1,6 @@
 import { computePerImageDurationSec } from "@/lib/video";
 
-export type TimelineTrackType = "SUBTITLE" | "VIDEO" | "IMAGE" | "TTS" | "AUDIO" | "BGM";
+export type TimelineTrackType = "SUBTITLE" | "VIDEO" | "IMAGE" | "TTS" | "AUDIO" | "BGM" | "SFX";
 
 export type TimelineClip = {
   id: string;
@@ -167,6 +167,10 @@ export type PersistedClipPayload = {
   text?: string;
   // TTS 클립 전용: 트림(트림-시작)으로 잘려나간 만큼 원본 오디오 소스에서 건너뛸 시작 오프셋(ms).
   sourceOffsetMs?: number;
+  // "직접 업로드"로 추가한 클립 전용: UploadedMedia.id 참조. sourceId(AudioSegment/ImageAsset 등
+  // 자동 파이프라인 레코드)와는 별도 개념이라 필드를 분리했다 — 렌더링에는 아직 연결되지 않는다.
+  mediaId?: string;
+  mediaKind?: "video" | "image" | "audio";
   // 자막 클립 전용
   style?: Partial<SubtitleStyle>;
   // 비디오 클립 전용(현재는 VIDEO 트랙에 클립이 없어 미사용 — §1.3 6번 완료 후 연결)
@@ -191,6 +195,8 @@ export type PersistedTimelineTrack = {
   type: TimelineTrackType;
   name: string;
   order: number;
+  // true: syncTimeline이 관리하는 자동 트랙(타입당 최초 1개). false: "트랙 추가"로 사용자가 만든 트랙.
+  autoSync: boolean;
   clips: PersistedTimelineClip[];
 };
 

@@ -45,6 +45,8 @@ function toClipPayload(payload: Prisma.JsonValue): ClipPayload {
     label: p?.label ?? "",
     text: p?.text,
     sourceOffsetMs: p?.sourceOffsetMs,
+    mediaId: p?.mediaId,
+    mediaKind: p?.mediaKind,
     style: p?.style,
     transform: p?.transform,
     effects: p?.effects,
@@ -106,8 +108,9 @@ export async function syncTimeline(projectId: string) {
     bgm,
   });
 
+  // 사용자가 "트랙 추가"로 만든 트랙(autoSync=false)은 동기화 대상이 아니다 — 절대 만들거나 지우지 않는다.
   const tracks = await prisma.timelineTrack.findMany({
-    where: { timelineId: timeline.id },
+    where: { timelineId: timeline.id, autoSync: true },
     include: { clips: true },
   });
 
@@ -264,7 +267,7 @@ export async function deleteClip(clipId: string) {
 export async function applySubtitleLineLengthFix(projectId: string, maxChars?: number) {
   const timeline = await ensureTimelineShell(projectId);
   const subtitleTrack = await prisma.timelineTrack.findFirstOrThrow({
-    where: { timelineId: timeline.id, type: "SUBTITLE" },
+    where: { timelineId: timeline.id, type: "SUBTITLE", autoSync: true },
     include: { clips: true },
   });
 
@@ -307,7 +310,7 @@ export async function updateClipStyle(clipId: string, style: Partial<SubtitleSty
 export async function applyStyleToAllSubtitles(projectId: string, style: Partial<SubtitleStyle>) {
   const timeline = await ensureTimelineShell(projectId);
   const subtitleTrack = await prisma.timelineTrack.findFirstOrThrow({
-    where: { timelineId: timeline.id, type: "SUBTITLE" },
+    where: { timelineId: timeline.id, type: "SUBTITLE", autoSync: true },
     include: { clips: true },
   });
 
@@ -442,11 +445,11 @@ export async function removeGapsBetweenClips(clipIds: string[]) {
 export async function addTtsBreathingGaps(projectId: string, gapMs: number) {
   const timeline = await ensureTimelineShell(projectId);
   const ttsTrack = await prisma.timelineTrack.findFirstOrThrow({
-    where: { timelineId: timeline.id, type: "TTS" },
+    where: { timelineId: timeline.id, type: "TTS", autoSync: true },
     include: { clips: { orderBy: { startMs: "asc" } } },
   });
   const subtitleTrack = await prisma.timelineTrack.findFirstOrThrow({
-    where: { timelineId: timeline.id, type: "SUBTITLE" },
+    where: { timelineId: timeline.id, type: "SUBTITLE", autoSync: true },
     include: { clips: { orderBy: { startMs: "asc" } } },
   });
 
@@ -473,6 +476,76 @@ export async function scaleTrackToTargetDuration(trackId: string, targetDuration
   await prisma.$transaction(
     updates.map((u) => prisma.timelineClip.update({ where: { id: u.id }, data: { startMs: u.startMs, endMs: u.endMs } })),
   );
+}
+
+const TRACK_TYPE_LABELS: Record<TimelineTrackType, string> = {
+  SUBTITLE: "자막",
+  VIDEO: "비디오",
+  IMAGE: "이미지",
+  TTS: "TTS",
+  AUDIO: "오디오",
+  BGM: "BGM",
+  SFX: "효과음",
+};
+
+// "트랙 추가": 사용자가 직접 만드는 트랙은 항상 autoSync=false라 syncTimeline이 절대 건드리지 않는다.
+// BGM은 참조 사이트와 동일하게 최대 2개(자동 1개 + 수동 1개)로 제한한다.
+export async function addTrack(projectId: string, type: TimelineTrackType, name?: string) {
+  const timeline = await ensureTimelineShell(projectId);
+
+  if (type === "BGM") {
+    const bgmCount = await prisma.timelineTrack.count({ where: { timelineId: timeline.id, type: "BGM" } });
+    if (bgmCount >= 2) {
+      throw new Error("BGM 트랙은 최대 2개까지 추가할 수 있습니다.");
+    }
+  }
+
+  const [maxOrder, sameTypeCount] = await Promise.all([
+    prisma.timelineTrack.aggregate({ where: { timelineId: timeline.id }, _max: { order: true } }),
+    prisma.timelineTrack.count({ where: { timelineId: timeline.id, type } }),
+  ]);
+
+  return prisma.timelineTrack.create({
+    data: {
+      timelineId: timeline.id,
+      type,
+      name: name?.trim() || `${TRACK_TYPE_LABELS[type]} ${sameTypeCount + 1}`,
+      order: (maxOrder._max.order ?? -1) + 1,
+      autoSync: false,
+    },
+  });
+}
+
+export async function removeTrack(trackId: string) {
+  const track = await prisma.timelineTrack.findUniqueOrThrow({ where: { id: trackId } });
+  if (track.autoSync) {
+    throw new Error("자동 생성된 트랙은 삭제할 수 없습니다.");
+  }
+  await prisma.timelineTrack.delete({ where: { id: trackId } });
+}
+
+// "직접 업로드"로 트랙에 클립을 추가한다. 렌더링에는 아직 연결되지 않는다(§1.3 "트랙/클립 추가" 참고).
+export async function addUploadedMediaClip(
+  trackId: string,
+  atMs: number,
+  media: { id: string; kind: "video" | "image" | "audio"; durationMs: number | null; label: string },
+) {
+  const timeline = await prisma.timeline.findFirstOrThrow({ where: { tracks: { some: { id: trackId } } } });
+  const existing = await prisma.timelineClip.findMany({ where: { trackId }, orderBy: { startMs: "asc" } });
+  const next = existing.find((c) => c.startMs >= atMs);
+  const maxMs = next?.startMs ?? timeline.durationMs;
+
+  const durationMs = media.durationMs ?? 3000; // 이미지처럼 고정 길이가 없으면 3초 기본값
+  const startMs = atMs;
+  const endMs = Math.min(startMs + durationMs, maxMs);
+  if (endMs <= startMs) {
+    throw new Error("클립을 추가할 공간이 없습니다.");
+  }
+
+  const payload: ClipPayload = { label: media.label, mediaId: media.id, mediaKind: media.kind };
+  return prisma.timelineClip.create({
+    data: { trackId, startMs, endMs, payload: payload as Prisma.InputJsonValue },
+  });
 }
 
 export type { TimelineClip };

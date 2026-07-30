@@ -21,6 +21,7 @@ const TRACK_COLORS: Record<TimelineTrackType, string> = {
   TTS: "bg-emerald-500",
   AUDIO: "bg-orange-500",
   BGM: "bg-orange-400",
+  SFX: "bg-pink-400",
 };
 
 const BASE_PX_PER_SEC = 20;
@@ -47,6 +48,15 @@ type Interaction = {
   previewEndMs: number;
 };
 
+const ADDABLE_TRACK_TYPES: { type: TimelineTrackType; label: string }[] = [
+  { type: "VIDEO", label: "비디오" },
+  { type: "IMAGE", label: "이미지" },
+  { type: "TTS", label: "TTS(음성)" },
+  { type: "BGM", label: "BGM" },
+  { type: "SFX", label: "효과음" },
+  { type: "SUBTITLE", label: "자막" },
+];
+
 export function TimelineTracks({
   timeline,
   zoom,
@@ -58,6 +68,9 @@ export function TimelineTracks({
   onSelectClip,
   onSeek,
   onCommitTiming,
+  onAddTrack,
+  onRemoveTrack,
+  onUploadToTrack,
 }: {
   timeline: PersistedTimeline;
   zoom: number;
@@ -70,6 +83,9 @@ export function TimelineTracks({
   onSelectClip: (clipId: string | null, additive: boolean) => void;
   onSeek: (ms: number) => void;
   onCommitTiming: (clipId: string, startMs: number, endMs: number) => void;
+  onAddTrack: (type: TimelineTrackType) => void;
+  onRemoveTrack: (trackId: string) => void;
+  onUploadToTrack: (trackId: string, file: File) => void;
 }) {
   const pxPerSec = (BASE_PX_PER_SEC * zoom) / 100;
   const durationSec = timeline.durationMs / 1000;
@@ -212,12 +228,55 @@ export function TimelineTracks({
           {timeline.tracks.map((track) => (
             <div
               key={track.id}
-              className="flex h-8 shrink-0 items-center gap-1.5 border-b border-white/5 px-2 text-white/70"
+              className="flex h-8 shrink-0 items-center gap-1 border-b border-white/5 px-2 text-white/70"
             >
-              <span className={cn("size-2 rounded-full", TRACK_COLORS[track.type])} />
+              <span className={cn("size-2 shrink-0 rounded-full", TRACK_COLORS[track.type])} />
               <span className="truncate">{track.name}</span>
+              <div className="ml-auto flex shrink-0 items-center gap-0.5">
+                <label
+                  className="cursor-pointer rounded px-1 text-white/40 hover:bg-white/10 hover:text-white"
+                  title="클립 추가(직접 업로드)"
+                >
+                  +
+                  <input
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) onUploadToTrack(track.id, file);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                {!track.autoSync && (
+                  <button
+                    onClick={() => onRemoveTrack(track.id)}
+                    className="rounded px-1 text-white/40 hover:bg-white/10 hover:text-red-400"
+                    title="트랙 삭제"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
             </div>
           ))}
+          <div className="flex h-8 shrink-0 items-center border-b border-white/5 px-2">
+            <select
+              className="w-full rounded border border-white/10 bg-white/5 px-1 py-0.5 text-[11px] text-white/70"
+              value=""
+              onChange={(e) => {
+                if (e.target.value) onAddTrack(e.target.value as TimelineTrackType);
+                e.target.value = "";
+              }}
+            >
+              <option value="">+ 트랙 추가</option>
+              {ADDABLE_TRACK_TYPES.map((t) => (
+                <option key={t.type} value={t.type}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div style={{ width: totalWidth }} className="relative" onMouseDown={handleTimelineMouseDown}>
