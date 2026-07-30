@@ -1667,26 +1667,26 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
             </>
           }
         />
-      </TooltipProvider>
 
-      <TimelineTracks
-        timeline={timeline}
-        zoom={zoom}
-        selectedClipId={selectedClipId}
-        multiSelectedIds={multiSelectedIds}
-        playheadMs={playheadMs}
-        snapEnabled={snapEnabled}
-        snapIntervalMs={snapIntervalMs}
-        onSelectClip={handleSelectClip}
-        onSeek={seekTo}
-        onCommitTiming={commitClipTiming}
-        onAddTrack={handleAddTrack}
-        onRemoveTrack={handleRemoveTrack}
-        onUploadToTrack={handleUploadToTrack}
-        onUpdateTrackFlags={handleUpdateTrackFlags}
-        onReorderTrack={handleReorderTrack}
-        onRemoveTrackGaps={handleRemoveTrackGaps}
-      />
+        <TimelineTracks
+          timeline={timeline}
+          zoom={zoom}
+          selectedClipId={selectedClipId}
+          multiSelectedIds={multiSelectedIds}
+          playheadMs={playheadMs}
+          snapEnabled={snapEnabled}
+          snapIntervalMs={snapIntervalMs}
+          onSelectClip={handleSelectClip}
+          onSeek={seekTo}
+          onCommitTiming={commitClipTiming}
+          onAddTrack={handleAddTrack}
+          onRemoveTrack={handleRemoveTrack}
+          onUploadToTrack={handleUploadToTrack}
+          onUpdateTrackFlags={handleUpdateTrackFlags}
+          onReorderTrack={handleReorderTrack}
+          onRemoveTrackGaps={handleRemoveTrackGaps}
+        />
+      </TooltipProvider>
 
       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
       <audio ref={ttsAudioRef} onTimeUpdate={handleTtsTimeUpdate} onEnded={handleTtsEnded} className="hidden" />

@@ -1,8 +1,9 @@
 "use client";
 
-import { ChevronDown, ChevronUp, Eye, EyeOff, List, Lock, Unlock } from "lucide-react";
+import { ChevronDown, ChevronUp, Eye, EyeOff, List, Lock, Unlock, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import {
   clampClipTiming,
@@ -57,6 +58,49 @@ const ADDABLE_TRACK_TYPES: { type: TimelineTrackType; label: string }[] = [
   { type: "SFX", label: "효과음" },
   { type: "SUBTITLE", label: "자막" },
 ];
+
+// 트랙 헤더 아이콘 공용: 마우스오버 툴팁 + on 상태(잠금/숨김 등)일 때 색으로도 구분되도록 한다
+// (아이콘 모양만으로는 잠금/해제가 잘 구별되지 않는다는 지적 반영). 비활성 버튼도 span으로 감싸
+// hover 이벤트가 막히지 않게 한다(shadcn Button과 동일한 이유).
+function TrackIconButton({
+  icon: Icon,
+  label,
+  onClick,
+  disabled,
+  active,
+  destructive,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  // true면 "켜짐" 상태(잠김/숨김)를 나타내는 강조색으로 표시한다.
+  active?: boolean;
+  destructive?: boolean;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex">
+          <button
+            onClick={onClick}
+            disabled={disabled}
+            className={cn(
+              "rounded px-1 disabled:opacity-20 disabled:hover:bg-transparent",
+              active
+                ? "text-amber-400 hover:bg-amber-400/10 hover:text-amber-300"
+                : "text-white/40 hover:bg-white/10 hover:text-white",
+              destructive && "hover:bg-white/10 hover:text-red-400",
+            )}
+          >
+            <Icon className="size-3" />
+          </button>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
 
 export function TimelineTracks({
   timeline,
@@ -240,70 +284,54 @@ export function TimelineTracks({
                 <span className={cn("size-2 shrink-0 rounded-full", TRACK_COLORS[track.type])} />
                 <span className="truncate">{track.name}</span>
                 <div className="ml-auto flex shrink-0 items-center">
-                  <button
+                  <TrackIconButton
+                    icon={ChevronUp}
+                    label="위로 — 같은 종류 소스 중 표출 우선순위를 높임"
                     onClick={() => onReorderTrack(track.id, "up")}
                     disabled={idx === 0}
-                    className="rounded text-white/40 hover:bg-white/10 hover:text-white disabled:opacity-20 disabled:hover:bg-transparent"
-                    title="위로 — 같은 종류 소스 중 표출 우선순위를 높임"
-                  >
-                    <ChevronUp className="size-3" />
-                  </button>
-                  <button
+                  />
+                  <TrackIconButton
+                    icon={ChevronDown}
+                    label="아래로 — 같은 종류 소스 중 표출 우선순위를 낮춤"
                     onClick={() => onReorderTrack(track.id, "down")}
                     disabled={idx === timeline.tracks.length - 1}
-                    className="rounded text-white/40 hover:bg-white/10 hover:text-white disabled:opacity-20 disabled:hover:bg-transparent"
-                    title="아래로 — 같은 종류 소스 중 표출 우선순위를 낮춤"
-                  >
-                    <ChevronDown className="size-3" />
-                  </button>
+                  />
                 </div>
               </div>
               <div className="flex items-center gap-0.5">
-                <button
+                <TrackIconButton
+                  icon={track.visible === false ? EyeOff : Eye}
+                  label={track.visible === false ? "숨김 — 클릭해서 미리보기에서 다시 보이기" : "보임 — 클릭해서 미리보기에서 숨기기"}
                   onClick={() => onUpdateTrackFlags(track.id, { visible: track.visible === false })}
-                  className="rounded px-1 text-white/40 hover:bg-white/10 hover:text-white"
-                  title={track.visible === false ? "숨김 — 미리보기에서 보이기" : "보임 — 미리보기에서 숨기기"}
-                >
-                  {track.visible === false ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
-                </button>
-                <button
+                  active={track.visible === false}
+                />
+                <TrackIconButton
+                  icon={track.locked ? Lock : Unlock}
+                  label={track.locked ? "잠김 — 클릭해서 잠금 해제" : "잠금 안 됨 — 클릭해서 편집/이동 방지"}
                   onClick={() => onUpdateTrackFlags(track.id, { locked: !track.locked })}
-                  className="rounded px-1 text-white/40 hover:bg-white/10 hover:text-white"
-                  title={track.locked ? "잠금 해제" : "잠금 — 편집/이동 방지"}
-                >
-                  {track.locked ? <Lock className="size-3" /> : <Unlock className="size-3" />}
-                </button>
-                <button
-                  onClick={() => onRemoveTrackGaps(track.id)}
-                  className="rounded px-1 text-white/40 hover:bg-white/10 hover:text-white"
-                  title="클립 사이 빈 공간 제거"
-                >
-                  <List className="size-3" />
-                </button>
+                  active={track.locked}
+                />
+                <TrackIconButton icon={List} label="클립 사이 빈 공간 제거" onClick={() => onRemoveTrackGaps(track.id)} />
                 <div className="ml-auto flex shrink-0 items-center gap-0.5">
-                  <label
-                    className="cursor-pointer rounded px-1 text-white/40 hover:bg-white/10 hover:text-white"
-                    title="클립 추가(직접 업로드)"
-                  >
-                    +
-                    <input
-                      type="file"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) onUploadToTrack(track.id, file);
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <label className="cursor-pointer rounded px-1 text-white/40 hover:bg-white/10 hover:text-white">
+                        +
+                        <input
+                          type="file"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) onUploadToTrack(track.id, file);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                    </TooltipTrigger>
+                    <TooltipContent>클립 추가(직접 업로드)</TooltipContent>
+                  </Tooltip>
                   {!track.autoSync && (
-                    <button
-                      onClick={() => onRemoveTrack(track.id)}
-                      className="rounded px-1 text-white/40 hover:bg-white/10 hover:text-red-400"
-                      title="트랙 삭제"
-                    >
-                      ×
-                    </button>
+                    <TrackIconButton icon={X} label="트랙 삭제" onClick={() => onRemoveTrack(track.id)} destructive />
                   )}
                 </div>
               </div>
