@@ -30,7 +30,20 @@ const transformSchema = z
   .partial();
 
 const effectsSchema = z
-  .object({ colorPreset: z.string(), brightness: z.number(), contrast: z.number(), saturation: z.number(), temperature: z.number() })
+  .object({
+    colorPreset: z.string(),
+    brightness: z.number(),
+    contrast: z.number(),
+    saturation: z.number(),
+    temperature: z.number(),
+    // 이미지 클립 전용(패닝/줌) — 비디오 클립은 이 필드들을 보내지 않는다.
+    panEnabled: z.boolean(),
+    panDirection: z.enum(["random", "left", "right", "up", "down"]),
+    panSpeed: z.enum(["slow", "normal", "fast"]),
+    zoomEnabled: z.boolean(),
+    zoomType: z.enum(["in", "out"]),
+    zoomIntensity: z.number(),
+  })
   .partial();
 
 const transitionSchema = z

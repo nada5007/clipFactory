@@ -14,7 +14,7 @@ import {
   type PersistedClipPayload,
   type SubtitleStyle,
   type TimelineClip,
-  type VideoClipEffects,
+  type ImageClipEffects,
   type VideoClipKeyframes,
   type VideoClipMask,
   type VideoClipOptions,
@@ -333,7 +333,7 @@ export async function updateClipVideoProps(
   clipId: string,
   props: {
     transform?: Partial<VideoClipTransform>;
-    effects?: Partial<VideoClipEffects>;
+    effects?: Partial<ImageClipEffects>;
     transition?: Partial<VideoClipTransition>;
     videoOptions?: Partial<VideoClipOptions>;
     mask?: VideoClipMask;

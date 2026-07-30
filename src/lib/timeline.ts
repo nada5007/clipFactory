@@ -97,6 +97,30 @@ export const DEFAULT_VIDEO_EFFECTS: VideoClipEffects = {
   temperature: 0,
 };
 
+// 이미지 클립 전용 효과 — 색보정은 비디오와 동일(VideoClipEffects 상속)하고, 패닝/줌(켄 번즈)이 추가된다.
+export type PanDirection = "random" | "left" | "right" | "up" | "down";
+export type PanSpeed = "slow" | "normal" | "fast";
+export type ZoomType = "in" | "out";
+
+export type ImageClipEffects = VideoClipEffects & {
+  panEnabled: boolean;
+  panDirection: PanDirection;
+  panSpeed: PanSpeed;
+  zoomEnabled: boolean;
+  zoomType: ZoomType;
+  zoomIntensity: number;
+};
+
+export const DEFAULT_IMAGE_EFFECTS: ImageClipEffects = {
+  ...DEFAULT_VIDEO_EFFECTS,
+  panEnabled: false,
+  panDirection: "random",
+  panSpeed: "normal",
+  zoomEnabled: false,
+  zoomType: "in",
+  zoomIntensity: 1.3,
+};
+
 export const COLOR_PRESETS = [
   { key: "none", label: "없음" },
   { key: "cinematic", label: "시네마틱" },
@@ -175,7 +199,9 @@ export type PersistedClipPayload = {
   style?: Partial<SubtitleStyle>;
   // 비디오 클립 전용(현재는 VIDEO 트랙에 클립이 없어 미사용 — §1.3 6번 완료 후 연결)
   transform?: Partial<VideoClipTransform>;
-  effects?: Partial<VideoClipEffects>;
+  // 이미지 클립도 이 필드를 쓰는데, ImageClipEffects가 VideoClipEffects의 상위집합(패닝/줌 추가)이라
+  // Partial<ImageClipEffects>가 두 경우를 모두 커버한다.
+  effects?: Partial<ImageClipEffects>;
   transition?: Partial<VideoClipTransition>;
   videoOptions?: Partial<VideoClipOptions>;
   mask?: VideoClipMask;

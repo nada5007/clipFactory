@@ -1231,7 +1231,8 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                 </span>
               )}
             </p>
-            {selected && (selected.track.type === "SUBTITLE" || selected.track.type === "VIDEO") ? (
+            {selected &&
+            (selected.track.type === "SUBTITLE" || selected.track.type === "VIDEO" || selected.track.type === "IMAGE") ? (
               <ClipPropertiesPanel
                 projectId={projectId}
                 clip={selected.clip}

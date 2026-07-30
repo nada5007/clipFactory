@@ -264,6 +264,16 @@ model Project {
 
 `formatMmSsMs`/`parseMmSsMs`를 `src/lib/timeline.ts`로 옮겨 단위 테스트 추가, `tsc`/`lint`/vitest(379/379) 확인.
 
+**미리보기 탭 자막 스타일 미반영 버그 수정 (2026-07-30)**: 미리보기 탭의 자막 오버레이가 스타일 탭 설정과 무관하게 항상 고정 스타일(검은 배경/흰 글자/고정 크기)로 하드코딩되어 있던 버그 수정. `resolveSubtitleStyle` 결과를 그대로 써서 폰트/크기/색상/배경색·투명도/위치/테두리가 실제 렌더링(ASS 번인)과 동일하게 반영되도록 함. 미리보기 컨테이너의 실측 너비를 재서(ResizeObserver) 절대 px 값들을 화면 크기 비율로 축소.
+
+**이미지 클립 속성 패널 (2026-07-30 요청, 참조 캡처 근거)**: ⚠️ 이 항목도 착수 전 기재 원칙을 지키지 못하고 구현 후 기재함. 사용자가 참조 사이트의 이미지 클립 속성 패널(기본정보/변환/이미지 효과/전환/키프레임/특수효과/마스크, 7개 서브탭) 캡처를 제공하며 구현 요청.
+
+1. §5.2 문서상 "비디오 클립과 동일 구조(변환/전환/키프레임/마스크), 비디오 옵션 탭 없음, 이미지 효과에 패닝/줌(켄 번즈) 섹션 추가"에 따라, 기존 `VideoClipProperties`를 `kind: "video" | "image"` 파라미터를 받는 공용 `MediaClipProperties`로 리팩터링해 두 클립 타입이 변환/전환/키프레임/마스크 로직을 공유하도록 함.
+2. `ImageClipEffects` 타입 신설(`VideoClipEffects`의 상위집합 — 색보정 필드는 그대로 두고 `panEnabled/panDirection/panSpeed/zoomEnabled/zoomType/zoomIntensity` 추가). `PersistedClipPayload.effects`를 `Partial<ImageClipEffects>`로 넓혀 비디오·이미지 둘 다 커버.
+3. `ClipPropertiesPanel`이 IMAGE 트랙 클립도 서브탭 패널로 라우팅하도록 부모 컴포넌트의 분기 조건 확장.
+4. 실제 이미지 클립에 PATCH로 패닝/줌 효과 + 변환(위치/스케일)을 curl로 검증 — 서로 다른 필드(effects/transform)를 순차로 PATCH해도 이전 값이 지워지지 않고 병합되는 것까지 확인.
+5. **범위 제외(디스클로저)**: 비디오와 마찬가지로 이 값들은 아직 최종 렌더링(이미지 슬라이드쇼 생성)에 반영되지 않는다 — 데이터 모델/UI만 준비된 상태이며, 실제 반영은 후속 라운드(이미지 컴포지팅/켄 번즈 효과를 ffmpeg 필터로 구현)에서 진행한다.
+
 ### 1.4 API 엔드포인트 (초안)
 
 ```

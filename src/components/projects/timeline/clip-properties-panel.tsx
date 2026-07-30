@@ -8,7 +8,7 @@ import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import {
   COLOR_PRESETS,
-  DEFAULT_VIDEO_EFFECTS,
+  DEFAULT_IMAGE_EFFECTS,
   DEFAULT_VIDEO_OPTIONS,
   DEFAULT_VIDEO_TRANSFORM,
   DEFAULT_VIDEO_TRANSITION,
@@ -16,11 +16,14 @@ import {
   parseMmSsMs,
   rewrapTextToMaxLineLength,
   resolveSubtitleStyle,
+  type PanDirection,
+  type PanSpeed,
   type PersistedTimelineClip,
   type PersistedTimelineTrack,
   type SubtitleStyle,
   type TransitionType,
   type VideoClipMask,
+  type ZoomType,
 } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
 
@@ -138,11 +141,12 @@ type Props = {
   onRefetchAll: () => void;
 };
 
-// 자막/비디오 클립 선택 시 서브탭 속성 패널(§5.2). 다른 클립 타입(TTS/이미지/BGM/비디오오디오)은
-// 기존 플랫 패널을 그대로 쓰고(부모 컴포넌트에서 처리), 이 컴포넌트는 자막·비디오 전용이다.
+// 자막/비디오/이미지 클립 선택 시 서브탭 속성 패널(§5.2). 다른 클립 타입(TTS/BGM/비디오오디오/효과음)은
+// 기존 플랫 패널을 그대로 쓰고(부모 컴포넌트에서 처리), 이 컴포넌트는 자막·비디오·이미지 전용이다.
 export function ClipPropertiesPanel(props: Props) {
   if (props.track.type === "SUBTITLE") return <SubtitleClipProperties {...props} />;
-  if (props.track.type === "VIDEO") return <VideoClipProperties {...props} />;
+  if (props.track.type === "VIDEO") return <MediaClipProperties {...props} kind="video" />;
+  if (props.track.type === "IMAGE") return <MediaClipProperties {...props} kind="image" />;
   return null;
 }
 
@@ -484,7 +488,28 @@ function SubtitleClipProperties({
   );
 }
 
-function VideoClipProperties({
+const PAN_DIRECTIONS: { value: PanDirection; label: string }[] = [
+  { value: "random", label: "랜덤" },
+  { value: "left", label: "좌" },
+  { value: "right", label: "우" },
+  { value: "up", label: "상" },
+  { value: "down", label: "하" },
+];
+const PAN_SPEEDS: { value: PanSpeed; label: string }[] = [
+  { value: "slow", label: "느림" },
+  { value: "normal", label: "보통" },
+  { value: "fast", label: "빠름" },
+];
+const ZOOM_TYPES: { value: ZoomType; label: string }[] = [
+  { value: "in", label: "줌 인" },
+  { value: "out", label: "줌 아웃" },
+];
+
+// 비디오·이미지 클립은 변환/전환/키프레임/마스크가 동일 구조라 하나의 컴포넌트로 공유한다.
+// 차이: 이미지는 "비디오 옵션" 탭이 없고, "효과" 탭에 패닝/줌(켄 번즈) 섹션이 추가되며,
+// "기본 정보" 탭의 AI 영상 분석 카드는 비디오 전용이다.
+function MediaClipProperties({
+  kind,
   projectId,
   clip,
   track,
@@ -494,16 +519,17 @@ function VideoClipProperties({
   onDelete,
   onCommitTiming,
   onPatched,
-}: Props) {
-  type VideoTab = "basic" | "transform" | "effects" | "transition" | "keyframes" | "special" | "options" | "mask";
-  const [tab, setTab] = useState<VideoTab>("basic");
+}: Props & { kind: "video" | "image" }) {
+  type MediaTab = "basic" | "transform" | "effects" | "transition" | "keyframes" | "special" | "options" | "mask";
+  const [tab, setTab] = useState<MediaTab>("basic");
   useEffect(() => setTab("basic"), [clip.id]);
 
   const sameTrackSelected = selectedClips.filter((c) => c.trackId === clip.trackId);
   const batchMode = sameTrackSelected.length > 1;
 
   const transform = { ...DEFAULT_VIDEO_TRANSFORM, ...clip.payload.transform };
-  const effects = { ...DEFAULT_VIDEO_EFFECTS, ...clip.payload.effects };
+  // ImageClipEffects가 VideoClipEffects의 상위집합이라 기본값 하나로 두 kind를 모두 커버한다.
+  const effects = { ...DEFAULT_IMAGE_EFFECTS, ...clip.payload.effects };
   const transition = { ...DEFAULT_VIDEO_TRANSITION, ...clip.payload.transition };
   const videoOptions = { ...DEFAULT_VIDEO_OPTIONS, ...clip.payload.videoOptions };
   const mask = clip.payload.mask ?? null;
@@ -516,26 +542,24 @@ function VideoClipProperties({
     if (updated) onPatched(updated.payload);
   }
 
+  const tabs: { key: MediaTab; label: string }[] = [
+    { key: "basic", label: "기본 정보" },
+    { key: "transform", label: "변환" },
+    { key: "effects", label: kind === "video" ? "비디오 효과" : "이미지 효과" },
+    { key: "transition", label: "전환" },
+    { key: "keyframes", label: "키프레임" },
+    { key: "special", label: "특수효과" },
+    ...(kind === "video" ? [{ key: "options" as const, label: "비디오 옵션" }] : []),
+    { key: "mask", label: "마스크" },
+  ];
+
   return (
     <div className="space-y-3">
       <p className={cn(batchMode ? "font-medium text-sky-400" : "text-white/50")}>
-        {batchMode ? `${sameTrackSelected.length}개 클립 선택됨 (일괄 편집 모드)` : `video 클립: ${clip.payload.label}`}
+        {batchMode ? `${sameTrackSelected.length}개 클립 선택됨 (일괄 편집 모드)` : `${kind} 클립: ${clip.payload.label}`}
       </p>
 
-      <TabBar
-        tabs={[
-          { key: "basic" as const, label: "기본 정보" },
-          { key: "transform" as const, label: "변환" },
-          { key: "effects" as const, label: "비디오 효과" },
-          { key: "transition" as const, label: "전환" },
-          { key: "keyframes" as const, label: "키프레임" },
-          { key: "special" as const, label: "특수효과" },
-          { key: "options" as const, label: "비디오 옵션" },
-          { key: "mask" as const, label: "마스크" },
-        ]}
-        active={tab}
-        onChange={setTab}
-      />
+      <TabBar tabs={tabs} active={tab} onChange={setTab} />
 
       {tab === "basic" && (
         <BasicInfoTab
@@ -546,16 +570,18 @@ function VideoClipProperties({
           onDelete={onDelete}
           onCommitTiming={onCommitTiming}
           extra={
-            <div className="space-y-1 rounded-md border border-violet-400/40 bg-violet-400/10 p-2">
-              <p className="font-medium text-violet-200">✨ AI 영상 분석</p>
-              <p className="text-white/50">
-                퍼온 영상으로 쇼츠를 만들 때 사용하는 기능입니다. 영상 음성·시각·viral 패턴을 종합 분석해 편집
-                포인트를 추출합니다.
-              </p>
-              <Button size="sm" className={OUTLINE_BTN} variant="outline" disabled title="다음 라운드 예정">
-                AI 영상 분석 시작
-              </Button>
-            </div>
+            kind === "video" ? (
+              <div className="space-y-1 rounded-md border border-violet-400/40 bg-violet-400/10 p-2">
+                <p className="font-medium text-violet-200">✨ AI 영상 분석</p>
+                <p className="text-white/50">
+                  퍼온 영상으로 쇼츠를 만들 때 사용하는 기능입니다. 영상 음성·시각·viral 패턴을 종합 분석해 편집
+                  포인트를 추출합니다.
+                </p>
+                <Button size="sm" className={OUTLINE_BTN} variant="outline" disabled title="다음 라운드 예정">
+                  AI 영상 분석 시작
+                </Button>
+              </div>
+            ) : undefined
           }
         />
       )}
@@ -564,7 +590,7 @@ function VideoClipProperties({
         <div className="space-y-2">
           <label className="flex items-start gap-2 rounded-md border border-sky-400/40 bg-sky-400/10 p-2">
             <Checkbox checked={applyAllTransform} onCheckedChange={(v) => setApplyAllTransform(Boolean(v))} />
-            <span>모든 비디오에 변환 적용</span>
+            <span>모든 {kind === "video" ? "비디오" : "이미지"}에 변환 적용</span>
           </label>
           <label className="block space-y-1">
             <span className="text-white/40">위치 X {transform.x.toFixed(2)}</span>
@@ -611,11 +637,88 @@ function VideoClipProperties({
       )}
 
       {tab === "effects" && (
-        <div className="space-y-2">
+        <div className="space-y-3">
           <label className="flex items-start gap-2 rounded-md border border-sky-400/40 bg-sky-400/10 p-2">
             <Checkbox checked={applyAllEffects} onCheckedChange={(v) => setApplyAllEffects(Boolean(v))} />
-            <span>모든 비디오에 효과 적용</span>
+            <span>모든 {kind === "video" ? "비디오" : "이미지"}에 효과 적용</span>
           </label>
+
+          {kind === "image" && (
+            <>
+              <div className="space-y-1.5 border-b border-white/10 pb-2">
+                <label className="flex items-center gap-2">
+                  <Checkbox checked={effects.panEnabled} onCheckedChange={(v) => update({ effects: { panEnabled: Boolean(v) } })} />
+                  <span className="font-medium">패닝 효과</span>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="space-y-1">
+                    <span className="text-white/40">방향</span>
+                    <select
+                      className="w-full rounded border border-white/20 bg-white/5 px-1.5 py-1 text-white disabled:opacity-40"
+                      value={effects.panDirection}
+                      disabled={!effects.panEnabled}
+                      onChange={(e) => update({ effects: { panDirection: e.target.value } })}
+                    >
+                      {PAN_DIRECTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-white/40">속도</span>
+                    <select
+                      className="w-full rounded border border-white/20 bg-white/5 px-1.5 py-1 text-white disabled:opacity-40"
+                      value={effects.panSpeed}
+                      disabled={!effects.panEnabled}
+                      onChange={(e) => update({ effects: { panSpeed: e.target.value } })}
+                    >
+                      {PAN_SPEEDS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              <div className="space-y-1.5 border-b border-white/10 pb-2">
+                <label className="flex items-center gap-2">
+                  <Checkbox checked={effects.zoomEnabled} onCheckedChange={(v) => update({ effects: { zoomEnabled: Boolean(v) } })} />
+                  <span className="font-medium">줌 효과</span>
+                </label>
+                <label className="block space-y-1">
+                  <span className="text-white/40">타입</span>
+                  <select
+                    className="w-full rounded border border-white/20 bg-white/5 px-1.5 py-1 text-white disabled:opacity-40"
+                    value={effects.zoomType}
+                    disabled={!effects.zoomEnabled}
+                    onChange={(e) => update({ effects: { zoomType: e.target.value } })}
+                  >
+                    {ZOOM_TYPES.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block space-y-1">
+                  <span className="text-white/40">강도 {effects.zoomIntensity.toFixed(1)}x</span>
+                  <Slider
+                    value={[effects.zoomIntensity]}
+                    onValueChange={([v]) => update({ effects: { zoomIntensity: v } })}
+                    min={1}
+                    max={2}
+                    step={0.1}
+                    disabled={!effects.zoomEnabled}
+                  />
+                </label>
+              </div>
+            </>
+          )}
+
           <p className="font-medium">색보정</p>
           <div className="grid grid-cols-3 gap-1">
             {COLOR_PRESETS.map((p) => (
@@ -652,7 +755,7 @@ function VideoClipProperties({
         <div className="space-y-2">
           <label className="flex items-start gap-2 rounded-md border border-sky-400/40 bg-sky-400/10 p-2">
             <Checkbox checked={applyAllTransition} onCheckedChange={(v) => setApplyAllTransition(Boolean(v))} />
-            <span>모든 비디오에 전환 적용</span>
+            <span>모든 {kind === "video" ? "비디오" : "이미지"}에 전환 적용</span>
           </label>
           <label className="block space-y-1">
             <span className="text-white/40">전환 효과</span>
@@ -718,7 +821,7 @@ function VideoClipProperties({
 
       {tab === "special" && <p className="text-white/40">참조 사이트에도 아직 공개되지 않은 기능입니다.</p>}
 
-      {tab === "options" && (
+      {tab === "options" && kind === "video" && (
         <div className="space-y-2">
           <label className="block space-y-1">
             <span className="text-white/40">재생 속도 (클립 길이가 함께 조정됩니다) {videoOptions.speed.toFixed(2)}x</span>
@@ -735,9 +838,7 @@ function VideoClipProperties({
         </div>
       )}
 
-      {tab === "mask" && (
-        <MaskTab mask={mask} onChange={(m) => update({ mask: m })} />
-      )}
+      {tab === "mask" && <MaskTab mask={mask} onChange={(m) => update({ mask: m })} />}
     </div>
   );
 }
