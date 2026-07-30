@@ -327,7 +327,7 @@ model Project {
 1. `TimelineTrack.visible`/`locked` 컬럼은 이미 스키마에 존재했지만(이전 라운드에서 선제적으로 추가된 채 미사용) 실제로 어디서도 쓰이지 않고 있었다 — 이번에 처음 연결한다. `PersistedTimelineTrack` 타입에 `visible`/`locked` 추가.
 2. 서비스: `updateTrackFlags(trackId, {visible?, locked?})`(단순 patch), `reorderTrack(trackId, direction: "up"|"down")`(트랙 타입 무관, 전체 트랙을 `order` 기준으로 정렬한 목록에서 바로 위/아래 트랙과 `order` 값을 맞바꿈 — "상하 이동" 요청을 가장 단순하게 구현).
 3. API: `PATCH /timeline/tracks/:trackId`(visible/locked), `POST /timeline/tracks/:trackId/reorder`(direction).
-4. 미리보기: 같은 타입 트랙이 여러 개일 때 `visible !== false`인 트랙 중 `order`가 가장 작은(우선순위가 가장 높은) 트랙 하나를 사용하도록 `getTrackClips` 로직을 변경 — 시간대별로 트랙을 넘나들며 겹치는 부분만 상위 트랙이 이기는 완전한 레이어 합성(②의 몫)까지는 이번 라운드에 포함하지 않는다.
+4. 미리보기: **(2026-07-30 사용자 정정)** 처음엔 "같은 타입 트랙이 여러 개면 visible·최우선순위 트랙 하나만 통째로 쓴다"로 단순 구현했으나, 사용자가 "우선순위는 트랙 전체가 아니라 그 트랙의 각 클립이 실제로 존재하는 재생 구간에만 적용되고, 상위 트랙에 클립이 없는 구간은 하위 트랙 클립이 보여야 한다"고 정정. `findClipAtMsByPriority(type, ms)`로 교체: `order` 오름차순으로 정렬한 visible 트랙들을 순서대로 순회하며, 각 트랙에서 그 시각(ms)을 덮는 클립을 찾고 있으면 즉시 반환, 없으면 다음 우선순위 트랙으로 내려간다(레이어가 겹치지 않는 시간대는 아래 트랙이 그대로 비쳐 보이는 것과 동일한 동작). `previewImageClip`/`previewSubtitleClip`/`activeSubtitleClip`에 적용. 트랙 하나만 있으면 되는 곳(TTS 순차 재생 등)은 기존 `getTrackClips`(최우선순위 트랙 하나 선택) 그대로 유지.
 5. 상호작용: `locked`인 트랙의 클립은 드래그(이동/트림)를 시작하지 못하도록 막는다 — 선택(속성 확인)까지 막지는 않는다. 삭제/속성 편집 차단은 이번 라운드 범위 밖(디스클로저).
 6. UI: 트랙 헤더 좌측에 순서변경(▲▼) + 보이기/숨기기(눈) + 잠금(자물쇠) 아이콘, 우측 기존 추가(+)/삭제(×) 옆에 "클립 사이 빈 공간 제거" 아이콘 추가. **범위 축소(디스클로저)**: 트랙별 "목표 시간 맞추기" 아이콘은 좁은 트랙 헤더 폭(128px)에 MM:SS 입력을 넣기 애매해 이번 라운드에서는 제외하고, 기존처럼 클립을 선택한 뒤 상단 편집 도구 툴바의 목표 길이 아이콘을 쓰는 방식을 유지한다.
 

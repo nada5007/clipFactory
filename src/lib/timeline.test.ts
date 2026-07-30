@@ -10,6 +10,7 @@ import {
   computeImageRenderSegments,
   computeSplitTimes,
   computeTimelineStats,
+  findClipAtMsByPriority,
   formatMmSsMs,
   insertBreathingGaps,
   parseMmSsMs,
@@ -475,5 +476,41 @@ describe("resolveImageKenBurnsTransform", () => {
     const a = resolveImageKenBurnsTransform({ panEnabled: true, panDirection: "random" }, "clip-xyz", 1);
     const b = resolveImageKenBurnsTransform({ panEnabled: true, panDirection: "random" }, "clip-xyz", 1);
     expect(a).toBe(b);
+  });
+});
+
+describe("findClipAtMsByPriority", () => {
+  function clip(id: string, startMs: number, endMs: number) {
+    return { id, trackId: "x", startMs, endMs, payload: { label: id } };
+  }
+
+  it("상위(order가 가장 작은) 트랙에 그 시각을 덮는 클립이 있으면 그것을 쓴다", () => {
+    const tracks = [
+      { type: "IMAGE" as const, order: 0, visible: true, clips: [clip("top", 0, 1000)] },
+      { type: "IMAGE" as const, order: 1, visible: true, clips: [clip("bottom", 0, 1000)] },
+    ];
+    expect(findClipAtMsByPriority(tracks, "IMAGE", 500)?.id).toBe("top");
+  });
+
+  it("상위 트랙에 그 시각을 덮는 클립이 없으면 다음 우선순위 트랙으로 내려간다", () => {
+    const tracks = [
+      { type: "IMAGE" as const, order: 0, visible: true, clips: [clip("top", 0, 500)] },
+      { type: "IMAGE" as const, order: 1, visible: true, clips: [clip("bottom", 0, 1000)] },
+    ];
+    // top 트랙은 500ms까지만 클립이 있어 그 뒤(700ms)는 bottom 트랙이 비쳐 보여야 한다.
+    expect(findClipAtMsByPriority(tracks, "IMAGE", 700)?.id).toBe("bottom");
+  });
+
+  it("숨긴(visible=false) 트랙은 우선순위가 높아도 건너뛴다", () => {
+    const tracks = [
+      { type: "IMAGE" as const, order: 0, visible: false, clips: [clip("hidden", 0, 1000)] },
+      { type: "IMAGE" as const, order: 1, visible: true, clips: [clip("visible", 0, 1000)] },
+    ];
+    expect(findClipAtMsByPriority(tracks, "IMAGE", 500)?.id).toBe("visible");
+  });
+
+  it("어느 트랙에도 그 시각을 덮는 클립이 없으면 null을 반환한다", () => {
+    const tracks = [{ type: "IMAGE" as const, order: 0, visible: true, clips: [clip("a", 0, 500)] }];
+    expect(findClipAtMsByPriority(tracks, "IMAGE", 900)).toBeNull();
   });
 });

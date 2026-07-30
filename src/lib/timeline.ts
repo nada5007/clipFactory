@@ -417,6 +417,26 @@ export type TimelineStats = {
   clipCountsByTrack: { name: string; count: number }[];
 };
 
+// 미리보기/재생 화면 합성: 같은 타입 트랙이 여러 개일 때(예: "+ 트랙 추가"로 만든 Image 2), 트랙
+// 우선순위는 "가장 우선순위 높은 트랙만 통째로 쓴다"가 아니라 "그 트랙에 클립이 있는 시간대에만"
+// 적용된다. order 오름차순(우선순위가 가장 높은 트랙부터)으로 순회하며 각 트랙에서 ms를 덮는 클립을
+// 찾고, 있으면 즉시 반환하며, 없으면 다음 우선순위 트랙으로 내려간다(겹치지 않는 시간대는 아래
+// 트랙이 그대로 비쳐 보이는 레이어 합성과 동일한 동작).
+export function findClipAtMsByPriority(
+  tracks: { type: TimelineTrackType; order: number; visible: boolean; clips: PersistedTimelineClip[] }[],
+  type: TimelineTrackType,
+  ms: number,
+): PersistedTimelineClip | null {
+  const sorted = tracks
+    .filter((t) => t.type === type && t.visible !== false)
+    .sort((a, b) => a.order - b.order);
+  for (const track of sorted) {
+    const clip = track.clips.find((c) => ms >= c.startMs && ms < c.endMs);
+    if (clip) return clip;
+  }
+  return null;
+}
+
 export function computeTimelineStats(timeline: {
   durationMs: number;
   tracks: { name: string; clips: unknown[] }[];

@@ -36,6 +36,7 @@ import { useJobProgress } from "@/hooks/use-job-progress";
 import {
   analyzeSubtitleLineLength,
   computeTimelineStats,
+  findClipAtMsByPriority,
   formatMmSsMs,
   parseMmSsMs,
   RECOMMENDED_SUBTITLE_CHARS_PER_LINE,
@@ -551,9 +552,8 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     audio.playbackRate = bgmSettings.playbackSpeed;
   }, [bgmSettings]);
 
-  // 같은 타입 트랙이 여러 개면(예: "+ 트랙 추가"로 만든 Image 2) visible한 트랙 중 order가 가장 작은
-  // (우선순위가 가장 높은) 트랙 하나만 미리보기/재생에 쓴다. 시간대별로 트랙을 넘나드는 완전한 레이어
-  // 합성(겹친 구간만 상위가 이김)은 후속 라운드 과제로 남겨둔다(§1.3 disclosure).
+  // TTS 순차 재생 등 "트랙 하나가 필요한" 곳에서 쓴다 — visible한 트랙 중 order가 가장 작은
+  // (우선순위가 가장 높은) 트랙 하나를 고른다.
   function getTrackClips(type: PersistedTimeline["tracks"][number]["type"]) {
     const candidates = (timeline?.tracks ?? [])
       .filter((t) => t.type === type && t.visible !== false)
@@ -565,10 +565,12 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     return clips.find((c) => ms >= c.startMs && ms < c.endMs) ?? null;
   }
 
-  const activeSubtitleClip = isPlaying ? findClipAtMs(getTrackClips("SUBTITLE"), playheadMs) : null;
+  const activeSubtitleClip = isPlaying
+    ? findClipAtMsByPriority(timeline?.tracks ?? [], "SUBTITLE", playheadMs)
+    : null;
   // 미리보기 탭 합성용: 재생 여부와 무관하게 항상 현재 재생헤드 위치의 이미지/자막을 보여준다.
-  const previewImageClip = findClipAtMs(getTrackClips("IMAGE"), playheadMs);
-  const previewSubtitleClip = findClipAtMs(getTrackClips("SUBTITLE"), playheadMs);
+  const previewImageClip = findClipAtMsByPriority(timeline?.tracks ?? [], "IMAGE", playheadMs);
+  const previewSubtitleClip = findClipAtMsByPriority(timeline?.tracks ?? [], "SUBTITLE", playheadMs);
   // 스타일 탭에서 설정한 폰트/크기/색상/배경/위치/테두리가 실제 렌더링(ASS 번인)과 동일하게 반영되도록,
   // 하드코딩된 스타일 대신 resolveSubtitleStyle 결과를 그대로 쓴다.
   const previewSubtitleStyle = previewSubtitleClip
