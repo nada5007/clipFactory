@@ -286,15 +286,23 @@ export function TimelineTracks({
                 <div className="ml-auto flex shrink-0 items-center">
                   <TrackIconButton
                     icon={ChevronUp}
-                    label="위로 — 같은 종류 소스 중 표출 우선순위를 높임"
+                    label={
+                      track.locked || timeline.tracks[idx - 1]?.locked
+                        ? "잠긴 트랙은 순서를 바꿀 수 없음"
+                        : "위로 — 같은 종류 소스 중 표출 우선순위를 높임"
+                    }
                     onClick={() => onReorderTrack(track.id, "up")}
-                    disabled={idx === 0}
+                    disabled={idx === 0 || track.locked || timeline.tracks[idx - 1]?.locked}
                   />
                   <TrackIconButton
                     icon={ChevronDown}
-                    label="아래로 — 같은 종류 소스 중 표출 우선순위를 낮춤"
+                    label={
+                      track.locked || timeline.tracks[idx + 1]?.locked
+                        ? "잠긴 트랙은 순서를 바꿀 수 없음"
+                        : "아래로 — 같은 종류 소스 중 표출 우선순위를 낮춤"
+                    }
                     onClick={() => onReorderTrack(track.id, "down")}
-                    disabled={idx === timeline.tracks.length - 1}
+                    disabled={idx === timeline.tracks.length - 1 || track.locked || timeline.tracks[idx + 1]?.locked}
                   />
                 </div>
               </div>

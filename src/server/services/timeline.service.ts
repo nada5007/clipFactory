@@ -616,6 +616,9 @@ export async function updateTrackFlags(trackId: string, patch: { visible?: boole
 // 바로 위/아래 트랙과 order 값을 맞바꾼다. 이 순서가 같은 타입 소스 간 미리보기/렌더링 표출 우선순위가 된다.
 export async function reorderTrack(trackId: string, direction: "up" | "down") {
   const track = await prisma.timelineTrack.findUniqueOrThrow({ where: { id: trackId } });
+  if (track.locked) {
+    throw new Error("잠긴 트랙은 순서를 바꿀 수 없습니다.");
+  }
   const siblings = await prisma.timelineTrack.findMany({
     where: { timelineId: track.timelineId },
     orderBy: { order: "asc" },
@@ -625,6 +628,9 @@ export async function reorderTrack(trackId: string, direction: "up" | "down") {
   if (targetIdx < 0 || targetIdx >= siblings.length) return;
 
   const target = siblings[targetIdx];
+  if (target.locked) {
+    throw new Error("잠긴 트랙과는 순서를 바꿀 수 없습니다.");
+  }
   await prisma.$transaction([
     prisma.timelineTrack.update({ where: { id: track.id }, data: { order: target.order } }),
     prisma.timelineTrack.update({ where: { id: target.id }, data: { order: track.order } }),

@@ -652,4 +652,27 @@ describe("reorderTrack / updateTrackFlags", () => {
       await cleanup(project.id, channel.id);
     }
   });
+
+  it("잠긴 트랙은 순서를 바꿀 수 없고, 잠긴 트랙과도 순서를 바꿀 수 없다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [{ order: 0, text: "문장", startMs: 0, endMs: 1000 }],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const sorted = [...timeline!.tracks].sort((a, b) => a.order - b.order);
+      const [first, second] = sorted;
+
+      await updateTrackFlags(first.id, { locked: true });
+      await expect(reorderTrack(first.id, "down")).rejects.toThrow("잠긴 트랙은");
+      await expect(reorderTrack(second.id, "up")).rejects.toThrow("잠긴 트랙과는");
+
+      const stillFirst = await prisma.timelineTrack.findUniqueOrThrow({ where: { id: first.id } });
+      const stillSecond = await prisma.timelineTrack.findUniqueOrThrow({ where: { id: second.id } });
+      expect(stillFirst.order).toBe(first.order);
+      expect(stillSecond.order).toBe(second.order);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
 });
