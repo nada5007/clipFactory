@@ -525,7 +525,13 @@ describe("updateAudioOptions", () => {
 
       const updated = await updateAudioOptions(ttsClip.id, { volume: 0.5, muted: true });
       expect(updated.endMs).toBe(1000);
-      expect(toPayloadAudioOptions(updated.payload)).toEqual({ volume: 0.5, muted: true, speed: 1 });
+      expect(toPayloadAudioOptions(updated.payload)).toEqual({
+        volume: 0.5,
+        muted: true,
+        speed: 1,
+        fadeInMs: 0,
+        fadeOutMs: 0,
+      });
     } finally {
       await cleanup(project.id, channel.id);
     }

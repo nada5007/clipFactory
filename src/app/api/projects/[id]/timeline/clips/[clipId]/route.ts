@@ -73,7 +73,13 @@ const transitionSchema = z
 const videoOptionsSchema = z.object({ speed: z.number(), flipH: z.boolean() }).partial();
 
 const audioOptionsSchema = z
-  .object({ volume: z.number().min(0).max(2), muted: z.boolean(), speed: z.number().min(0.25).max(4) })
+  .object({
+    volume: z.number().min(0).max(2),
+    muted: z.boolean(),
+    speed: z.number().min(0.25).max(4),
+    fadeInMs: z.number().min(0).max(10000),
+    fadeOutMs: z.number().min(0).max(10000),
+  })
   .partial();
 
 const maskSchema = z

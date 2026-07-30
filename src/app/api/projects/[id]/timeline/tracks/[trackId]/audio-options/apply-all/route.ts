@@ -4,7 +4,13 @@ import { z } from "zod";
 import { applyAudioOptionsToTrack } from "@/server/services/timeline.service";
 
 const audioOptionsSchema = z
-  .object({ volume: z.number().min(0).max(2), muted: z.boolean(), speed: z.number().min(0.25).max(4) })
+  .object({
+    volume: z.number().min(0).max(2),
+    muted: z.boolean(),
+    speed: z.number().min(0.25).max(4),
+    fadeInMs: z.number().min(0).max(10000),
+    fadeOutMs: z.number().min(0).max(10000),
+  })
   .partial();
 
 // "모든 TTS/BGM에 설정 적용" 체크박스: 해당 트랙(TTS 또는 BGM) 전체 클립에 동일 오디오 옵션을 적용한다.

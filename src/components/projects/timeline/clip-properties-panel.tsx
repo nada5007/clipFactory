@@ -1038,6 +1038,18 @@ function AudioClipProperties({
               </p>
             )}
           </div>
+
+          <div className="space-y-2 border-t border-white/10 pt-2">
+            <p className="font-medium">페이드 설정</p>
+            <label className="block space-y-1">
+              <span className="text-white/40">페이드인 {audio.fadeInMs.toFixed(2)}ms</span>
+              <Slider value={[audio.fadeInMs]} onValueChange={([v]) => update({ fadeInMs: v })} min={0} max={3000} step={50} />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-white/40">페이드아웃 {audio.fadeOutMs.toFixed(2)}ms</span>
+              <Slider value={[audio.fadeOutMs]} onValueChange={([v]) => update({ fadeOutMs: v })} min={0} max={3000} step={50} />
+            </label>
+          </div>
         </div>
       )}
     </div>

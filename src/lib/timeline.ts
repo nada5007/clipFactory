@@ -247,9 +247,15 @@ export type VideoClipOptions = { speed: number; flipH: boolean };
 export const DEFAULT_VIDEO_OPTIONS: VideoClipOptions = { speed: 1, flipH: false };
 
 // TTS/BGM 클립 전용(§5.2 오디오 탭). speed는 클립 길이 재계산에만 쓰이고(§1.3 disclosure),
-// 실제 오디오 타임스트레치/피치 변경은 아직 렌더링에 연결되지 않는다.
-export type AudioClipOptions = { volume: number; muted: boolean; speed: number };
-export const DEFAULT_AUDIO_OPTIONS: AudioClipOptions = { volume: 1, muted: false, speed: 1 };
+// 실제 오디오 타임스트레치/피치/페이드 곡선 변경은 아직 렌더링에 연결되지 않는다.
+export type AudioClipOptions = { volume: number; muted: boolean; speed: number; fadeInMs: number; fadeOutMs: number };
+export const DEFAULT_AUDIO_OPTIONS: AudioClipOptions = {
+  volume: 1,
+  muted: false,
+  speed: 1,
+  fadeInMs: 0,
+  fadeOutMs: 0,
+};
 
 export type VideoClipMask = {
   shape: "rect" | "ellipse";
