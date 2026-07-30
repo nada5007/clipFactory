@@ -302,8 +302,6 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const [breathingGapMs, setBreathingGapMs] = useState(300);
   const [targetLengthSec, setTargetLengthSec] = useState(60);
   const [playheadMs, setPlayheadMs] = useState(0);
-  const [textDraft, setTextDraft] = useState("");
-  const [savingText, setSavingText] = useState(false);
   const [history, setHistory] = useState<TimingSnapshot[]>([]);
   const [future, setFuture] = useState<TimingSnapshot[]>([]);
 
@@ -402,7 +400,6 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const lintVisible = lint.exceedingIds.length > 0 && !dismissedLints.has("subtitle-line-length");
 
   const selected = useMemo(() => findClip(timeline, selectedClipId), [timeline, selectedClipId]);
-  const hasTextField = selected?.track.type === "SUBTITLE" || selected?.track.type === "TTS";
   const canSplit = selected != null && playheadMs > selected.clip.startMs && playheadMs < selected.clip.endMs;
 
   // 멀티 셀렉트된 클립 전체(자막 탭 일괄 편집 모드 등에서 사용) — 없으면 primary 선택 하나만 담는다.
@@ -443,10 +440,6 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
       if (found) seekTo(found.clip.startMs);
     }
   }
-
-  useEffect(() => {
-    setTextDraft(selected?.clip.payload.text ?? "");
-  }, [selected?.clip.id, selected?.clip.payload.text]);
 
   // BGM 오디오 엘리먼트는 설정이 바뀔 때만 src/재생 파라미터를 갱신하고, 재생 시작/탐색은
   // playBgmFrom에서 currentTime만 조정한다(재생 중 트랙 전환 때마다 다시 로드하지 않기 위함).
@@ -726,24 +719,6 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     window.addEventListener("keydown", handleEditKeys);
     return () => window.removeEventListener("keydown", handleEditKeys);
   }, []);
-
-  async function handleSaveText() {
-    if (!selected) return;
-    setSavingText(true);
-    try {
-      const res = await fetch(`/api/projects/${projectId}/timeline/clips/${selected.clip.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: textDraft }),
-      });
-      if (res.ok) {
-        const updated = await res.json();
-        setTimeline((prev) => (prev ? patchClipInTimeline(prev, selected.clip.id, { payload: updated.payload }) : prev));
-      }
-    } finally {
-      setSavingText(false);
-    }
-  }
 
   async function handleSplit() {
     if (!selected || !canSplit) return;
@@ -1324,7 +1299,11 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
               )}
             </p>
             {selected &&
-            (selected.track.type === "SUBTITLE" || selected.track.type === "VIDEO" || selected.track.type === "IMAGE") ? (
+            (selected.track.type === "SUBTITLE" ||
+              selected.track.type === "VIDEO" ||
+              selected.track.type === "IMAGE" ||
+              selected.track.type === "TTS" ||
+              selected.track.type === "BGM") ? (
               <ClipPropertiesPanel
                 projectId={projectId}
                 clip={selected.clip}
@@ -1371,20 +1350,6 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                     />
                   </label>
                 </div>
-
-                {hasTextField && (
-                  <div className="space-y-1">
-                    <span className="text-white/40">텍스트</span>
-                    <Textarea
-                      value={textDraft}
-                      onChange={(e) => setTextDraft(e.target.value)}
-                      className="min-h-16 border-white/20 bg-white/5 text-white"
-                    />
-                    <Button size="sm" onClick={handleSaveText} disabled={savingText}>
-                      {savingText ? "저장 중..." : "텍스트 저장"}
-                    </Button>
-                  </div>
-                )}
 
                 <div className="flex gap-2 pt-1">
                   <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={handleSplit} disabled={!canSplit}>

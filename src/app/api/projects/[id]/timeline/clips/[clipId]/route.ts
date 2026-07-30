@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import {
   deleteClip,
+  updateAudioOptions,
   updateClipStyle,
   updateClipText,
   updateClipTiming,
@@ -71,6 +72,10 @@ const transitionSchema = z
 
 const videoOptionsSchema = z.object({ speed: z.number(), flipH: z.boolean() }).partial();
 
+const audioOptionsSchema = z
+  .object({ volume: z.number().min(0).max(2), muted: z.boolean(), speed: z.number().min(0.25).max(4) })
+  .partial();
+
 const maskSchema = z
   .object({
     shape: z.enum(["rect", "ellipse"]),
@@ -101,6 +106,7 @@ const patchSchema = z.object({
   videoOptions: videoOptionsSchema.optional(),
   mask: maskSchema.optional(),
   keyframes: keyframesSchema.optional(),
+  audioOptions: audioOptionsSchema.optional(),
 });
 
 export async function PATCH(
@@ -111,7 +117,8 @@ export async function PATCH(
   if (!body.success) {
     return NextResponse.json({ error: body.error.flatten() }, { status: 400 });
   }
-  const { startMs, endMs, text, style, transform, effects, transition, videoOptions, mask, keyframes } = body.data;
+  const { startMs, endMs, text, style, transform, effects, transition, videoOptions, mask, keyframes, audioOptions } =
+    body.data;
   const hasVideoProps =
     transform !== undefined ||
     effects !== undefined ||
@@ -119,7 +126,14 @@ export async function PATCH(
     videoOptions !== undefined ||
     mask !== undefined ||
     keyframes !== undefined;
-  if (startMs === undefined && endMs === undefined && text === undefined && style === undefined && !hasVideoProps) {
+  if (
+    startMs === undefined &&
+    endMs === undefined &&
+    text === undefined &&
+    style === undefined &&
+    !hasVideoProps &&
+    audioOptions === undefined
+  ) {
     return NextResponse.json({ error: "변경할 값이 없습니다." }, { status: 400 });
   }
 
@@ -136,6 +150,9 @@ export async function PATCH(
     }
     if (hasVideoProps) {
       clip = await updateClipVideoProps(params.clipId, { transform, effects, transition, videoOptions, mask, keyframes });
+    }
+    if (audioOptions !== undefined) {
+      clip = await updateAudioOptions(params.clipId, audioOptions);
     }
     return NextResponse.json(clip);
   } catch (error) {

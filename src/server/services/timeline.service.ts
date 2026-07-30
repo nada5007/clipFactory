@@ -5,12 +5,14 @@ import {
   buildTimelineTracks,
   clampClipTiming,
   computeSplitTimes,
+  DEFAULT_AUDIO_OPTIONS,
   insertBreathingGaps,
   planClipSync,
   removeGapsBetweenSelectedClips,
   removeGapsInClips,
   rewrapTextToMaxLineLength,
   scaleClipsToTargetDuration,
+  type AudioClipOptions,
   type PersistedClipPayload,
   type SubtitleStyle,
   type TimelineClip,
@@ -54,6 +56,7 @@ function toClipPayload(payload: Prisma.JsonValue): ClipPayload {
     videoOptions: p?.videoOptions,
     mask: p?.mask,
     keyframes: p?.keyframes,
+    audioOptions: p?.audioOptions,
   };
 }
 
@@ -351,6 +354,64 @@ export async function updateClipVideoProps(
   if (props.keyframes !== undefined) next.keyframes = { ...payload.keyframes, ...props.keyframes };
 
   return prisma.timelineClip.update({ where: { id: clipId }, data: { payload: next satisfies ClipPayload } });
+}
+
+// TTS/BGM 클립 전용 오디오 옵션(볼륨/음소거/속도) 편집. 속도가 바뀌면 (이전속도/새속도) 비율만큼
+// 클립 길이를 재계산하고, sourceId가 같은 SUBTITLE 클립(TTS와 같은 스크립트 세그먼트 유래)이 있으면
+// 동일 비율로 길이를 맞춘다. 다음 클립과 겹치지 않도록 클램프하되, 이후 클립들을 밀어서 간격을
+// 유지해주지는 않는다(호흡구간 추가처럼 전체 캐스케이드하지 않음 — 알려진 단순화).
+export async function updateAudioOptions(clipId: string, patch: Partial<AudioClipOptions>) {
+  const clip = await prisma.timelineClip.findUniqueOrThrow({ where: { id: clipId } });
+  const payload = toClipPayload(clip.payload);
+  const prevOptions = { ...DEFAULT_AUDIO_OPTIONS, ...payload.audioOptions };
+  const nextOptions = { ...prevOptions, ...patch };
+  const ratio = prevOptions.speed / nextOptions.speed;
+
+  let endMs = clip.endMs;
+  if (ratio !== 1) {
+    const desiredDuration = Math.max(100, Math.round((clip.endMs - clip.startMs) * ratio));
+    const nextSibling = await prisma.timelineClip.findFirst({
+      where: { trackId: clip.trackId, startMs: { gte: clip.endMs }, id: { not: clip.id } },
+      orderBy: { startMs: "asc" },
+    });
+    const maxDuration = nextSibling ? nextSibling.startMs - clip.startMs : desiredDuration;
+    endMs = clip.startMs + Math.min(desiredDuration, maxDuration);
+  }
+
+  const updated = await prisma.timelineClip.update({
+    where: { id: clip.id },
+    data: { endMs, payload: { ...payload, audioOptions: nextOptions } satisfies ClipPayload },
+  });
+
+  if (ratio !== 1 && payload.sourceId) {
+    const timeline = await prisma.timeline.findFirstOrThrow({ where: { tracks: { some: { id: clip.trackId } } } });
+    const subtitleTrack = await prisma.timelineTrack.findFirst({
+      where: { timelineId: timeline.id, type: "SUBTITLE", autoSync: true },
+      include: { clips: true },
+    });
+    const subClip = subtitleTrack?.clips.find((c) => toClipPayload(c.payload).sourceId === payload.sourceId);
+    if (subClip) {
+      const desiredSubDuration = Math.max(100, Math.round((subClip.endMs - subClip.startMs) * ratio));
+      const nextSubSibling = await prisma.timelineClip.findFirst({
+        where: { trackId: subClip.trackId, startMs: { gte: subClip.endMs }, id: { not: subClip.id } },
+        orderBy: { startMs: "asc" },
+      });
+      const maxSubDuration = nextSubSibling ? nextSubSibling.startMs - subClip.startMs : desiredSubDuration;
+      const subEndMs = subClip.startMs + Math.min(desiredSubDuration, maxSubDuration);
+      await prisma.timelineClip.update({ where: { id: subClip.id }, data: { endMs: subEndMs } });
+    }
+  }
+
+  return updated;
+}
+
+// "모든 TTS/BGM에 설정 적용" 체크박스 — 같은 트랙의 클립 전체에 동일 오디오 옵션을 적용한다.
+export async function applyAudioOptionsToTrack(projectId: string, trackId: string, patch: Partial<AudioClipOptions>) {
+  const clips = await prisma.timelineClip.findMany({ where: { trackId } });
+  for (const c of clips) {
+    await updateAudioOptions(c.id, patch);
+  }
+  return getTimeline(projectId);
 }
 
 // 복제(Ctrl+D): 원본 클립 바로 뒤에 같은 길이로 삽입한다(다음 클립 경계 안으로 클램프, 자리가 없으면 에러).

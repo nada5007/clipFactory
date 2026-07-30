@@ -15,6 +15,7 @@ import {
   scaleTrackToTargetDuration,
   splitClip,
   syncTimeline,
+  updateAudioOptions,
   updateClipText,
   updateClipTiming,
 } from "@/server/services/timeline.service";
@@ -481,3 +482,56 @@ describe("scaleTrackToTargetDuration", () => {
     }
   });
 });
+
+describe("updateAudioOptions", () => {
+  it("속도를 바꾸면 (이전속도/새속도) 비율로 클립 길이가 바뀌고, 연결된 자막 클립도 같은 비율로 맞춰진다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [
+        { order: 0, text: "첫 문장", startMs: 0, endMs: 1000 },
+        { order: 1, text: "둘째 문장", startMs: 1000, endMs: 2000 },
+      ],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const ttsClip = timeline!.tracks.find((t) => t.type === "TTS")!.clips[0];
+      const subtitleClip = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips[0];
+
+      await updateAudioOptions(ttsClip.id, { speed: 2 });
+      const afterSpeedUp = await prisma.timelineClip.findUniqueOrThrow({ where: { id: ttsClip.id } });
+      expect(afterSpeedUp.endMs).toBe(500); // 1000ms / 2
+
+      const linkedSubtitle = await prisma.timelineClip.findUniqueOrThrow({ where: { id: subtitleClip.id } });
+      expect(linkedSubtitle.endMs).toBe(500);
+
+      // 다시 기본 속도로 되돌리면 원래 길이로 복원된다 — toClipPayload가 audioOptions를 보존해야
+      // "이전 속도"를 정확히 알 수 있다(이 필드가 누락되면 항상 기본값 1과 비교하게 되어 되돌아가지 않는 버그가 있었음).
+      await updateAudioOptions(ttsClip.id, { speed: 1 });
+      const afterRestore = await prisma.timelineClip.findUniqueOrThrow({ where: { id: ttsClip.id } });
+      expect(afterRestore.endMs).toBe(1000);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("볼륨/음소거는 클립 길이에 영향을 주지 않는다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [{ order: 0, text: "첫 문장", startMs: 0, endMs: 1000 }],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const ttsClip = timeline!.tracks.find((t) => t.type === "TTS")!.clips[0];
+
+      const updated = await updateAudioOptions(ttsClip.id, { volume: 0.5, muted: true });
+      expect(updated.endMs).toBe(1000);
+      expect(toPayloadAudioOptions(updated.payload)).toEqual({ volume: 0.5, muted: true, speed: 1 });
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+});
+
+function toPayloadAudioOptions(payload: unknown) {
+  return (payload as { audioOptions?: unknown }).audioOptions;
+}

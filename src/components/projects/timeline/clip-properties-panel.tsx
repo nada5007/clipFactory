@@ -8,6 +8,7 @@ import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import {
   COLOR_PRESETS,
+  DEFAULT_AUDIO_OPTIONS,
   DEFAULT_IMAGE_EFFECTS,
   DEFAULT_VIDEO_OPTIONS,
   DEFAULT_VIDEO_TRANSFORM,
@@ -150,6 +151,7 @@ export function ClipPropertiesPanel(props: Props) {
   if (props.track.type === "SUBTITLE") return <SubtitleClipProperties {...props} />;
   if (props.track.type === "VIDEO") return <MediaClipProperties {...props} kind="video" />;
   if (props.track.type === "IMAGE") return <MediaClipProperties {...props} kind="image" />;
+  if (props.track.type === "TTS" || props.track.type === "BGM") return <AudioClipProperties {...props} />;
   return null;
 }
 
@@ -924,6 +926,120 @@ function MaskTab({ mask, onChange }: { mask: VideoClipMask; onChange: (mask: Vid
       <Button variant="destructive" className="w-full" onClick={() => onChange(null)}>
         마스크 제거
       </Button>
+    </div>
+  );
+}
+
+// TTS/BGM 클립 전용(§5.2 오디오 탭) — 자막/비디오·이미지처럼 기본정보 + 오디오 2개 서브탭 구조를 공유한다.
+function AudioClipProperties({
+  projectId,
+  clip,
+  track,
+  canSplit,
+  onSplit,
+  onDelete,
+  onCommitTiming,
+  onPatched,
+  onRefetchAll,
+}: Props) {
+  type AudioTab = "basic" | "audio";
+  const [tab, setTab] = useState<AudioTab>("basic");
+  useEffect(() => setTab("basic"), [clip.id]);
+  const [applyAll, setApplyAll] = useState(false);
+
+  const trackLabel = track.type === "TTS" ? "TTS" : "BGM";
+  const audio = { ...DEFAULT_AUDIO_OPTIONS, ...clip.payload.audioOptions };
+
+  async function update(patch: Partial<typeof audio>) {
+    if (applyAll) {
+      const res = await fetch(`/api/projects/${projectId}/timeline/tracks/${track.id}/audio-options/apply-all`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (res.ok) onRefetchAll();
+    } else {
+      const updated = await patchClip(projectId, clip.id, { audioOptions: patch });
+      if (updated) onPatched(updated.payload);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-white/50">
+        {trackLabel.toLowerCase()} 클립: {clip.payload.label}
+      </p>
+
+      <TabBar
+        tabs={[
+          { key: "basic" as const, label: "기본 정보" },
+          { key: "audio" as const, label: "오디오" },
+        ]}
+        active={tab}
+        onChange={setTab}
+      />
+
+      {tab === "basic" && (
+        <BasicInfoTab clip={clip} track={track} canSplit={canSplit} onSplit={onSplit} onDelete={onDelete} onCommitTiming={onCommitTiming} />
+      )}
+
+      {tab === "audio" && (
+        <div className="space-y-3">
+          {clip.payload.text && (
+            <div className="space-y-1 rounded-md border border-white/10 bg-white/5 p-2">
+              <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[11px] font-medium text-emerald-300">
+                {trackLabel}
+              </span>{" "}
+              <span className="text-white/70">{clip.payload.text}</span>
+            </div>
+          )}
+
+          <label className="flex items-start gap-2 rounded-md border border-emerald-400/40 bg-emerald-400/10 p-2">
+            <Checkbox checked={applyAll} onCheckedChange={(v) => setApplyAll(Boolean(v))} />
+            <span>
+              모든 {trackLabel}에 설정 적용
+              <span className="mt-0.5 block text-white/50">
+                체크 시 아래 설정 변경이 모든 {trackLabel} 클립에 동시 적용됩니다
+              </span>
+            </span>
+          </label>
+
+          <div className="space-y-2 border-t border-white/10 pt-2">
+            <p className="font-medium">볼륨 설정</p>
+            <label className="flex items-center gap-2">
+              <Checkbox checked={audio.muted} onCheckedChange={(v) => update({ muted: Boolean(v) })} />
+              <span>음소거</span>
+            </label>
+            <label className="block space-y-1">
+              <span className="text-white/40">
+                볼륨 {audio.volume.toFixed(2)} ({Math.round(audio.volume * 100)}%)
+              </span>
+              <Slider
+                value={[audio.volume]}
+                onValueChange={([v]) => update({ volume: v })}
+                min={0}
+                max={2}
+                step={0.01}
+                disabled={audio.muted}
+              />
+            </label>
+          </div>
+
+          <div className="space-y-2 border-t border-white/10 pt-2">
+            <p className="font-medium">재생 속도</p>
+            <label className="block space-y-1">
+              <span className="text-white/40">속도 {audio.speed.toFixed(2)}x</span>
+              <Slider value={[audio.speed]} onValueChange={([v]) => update({ speed: v })} min={0.25} max={4} step={0.05} />
+              {audio.speed === 1 && <span className="text-white/30">기본 속도</span>}
+            </label>
+            {track.type === "TTS" && (
+              <p className="rounded-md border border-sky-400/30 bg-sky-400/10 p-2 text-sky-100">
+                연결된 자막이 있습니다. 속도 변경 시 자막 클립 길이도 함께 조정됩니다.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
