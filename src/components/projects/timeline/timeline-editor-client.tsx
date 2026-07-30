@@ -389,6 +389,19 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const hasTextField = selected?.track.type === "SUBTITLE" || selected?.track.type === "TTS";
   const canSplit = selected != null && playheadMs > selected.clip.startMs && playheadMs < selected.clip.endMs;
 
+  // 멀티 셀렉트된 클립 전체(자막 탭 일괄 편집 모드 등에서 사용) — 없으면 primary 선택 하나만 담는다.
+  const selectedClips = useMemo(() => {
+    if (!timeline) return [];
+    const ids = multiSelectedIds.size > 0 ? multiSelectedIds : selectedClipId ? new Set([selectedClipId]) : new Set<string>();
+    const result: PersistedTimelineClip[] = [];
+    for (const track of timeline.tracks) {
+      for (const c of track.clips) {
+        if (ids.has(c.id)) result.push(c);
+      }
+    }
+    return result;
+  }, [timeline, multiSelectedIds, selectedClipId]);
+
   // multiSelectedIds는 "현재 작업 대상 전체"(복사/삭제/갭제거 등)를, selectedClipId는 "마지막으로 클릭한
   // 클립"(속성 패널 표시용)을 가리킨다. 일반 클릭은 둘 다 그 클립 하나로 맞추고, Ctrl/Cmd+클릭만 토글한다.
   function handleSelectClip(clipId: string | null, additive: boolean) {
@@ -1176,6 +1189,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                 projectId={projectId}
                 clip={selected.clip}
                 track={selected.track}
+                selectedClips={selectedClips}
                 videoWidth={videoResolution.width}
                 videoHeight={videoResolution.height}
                 canSplit={canSplit}

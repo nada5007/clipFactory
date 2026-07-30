@@ -10,7 +10,9 @@ import {
   computeImageRenderSegments,
   computeSplitTimes,
   computeTimelineStats,
+  formatMmSsMs,
   insertBreathingGaps,
+  parseMmSsMs,
   planClipSync,
   removeGapsBetweenSelectedClips,
   removeGapsInClips,
@@ -386,5 +388,24 @@ describe("scaleClipsToTargetDuration", () => {
       { id: "a", startMs: 0, endMs: 2000 },
       { id: "b", startMs: 2000, endMs: 4000 },
     ]);
+  });
+});
+
+describe("formatMmSsMs / parseMmSsMs", () => {
+  it("ms를 MM:SS.mmm 형식으로 포맷한다", () => {
+    expect(formatMmSsMs(64560)).toBe("01:04.560");
+    expect(formatMmSsMs(0)).toBe("00:00.000");
+    expect(formatMmSsMs(3504)).toBe("00:03.504");
+  });
+
+  it("MM:SS.mmm 문자열을 ms로 되돌린다(왕복 변환)", () => {
+    expect(parseMmSsMs("01:04.560")).toBe(64560);
+    expect(parseMmSsMs(formatMmSsMs(123456))).toBe(123456);
+  });
+
+  it("초가 60 이상이거나 형식이 어긋나면 null을 반환한다", () => {
+    expect(parseMmSsMs("01:60.000")).toBeNull();
+    expect(parseMmSsMs("not-a-time")).toBeNull();
+    expect(parseMmSsMs("")).toBeNull();
   });
 });

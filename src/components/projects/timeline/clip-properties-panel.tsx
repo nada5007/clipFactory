@@ -12,6 +12,8 @@ import {
   DEFAULT_VIDEO_OPTIONS,
   DEFAULT_VIDEO_TRANSFORM,
   DEFAULT_VIDEO_TRANSITION,
+  formatMmSsMs,
+  parseMmSsMs,
   rewrapTextToMaxLineLength,
   resolveSubtitleStyle,
   type PersistedTimelineClip,
@@ -74,6 +76,40 @@ function formatClipTimecode(ms: number): string {
   return `${String(m).padStart(2, "0")}:${s}`;
 }
 
+// MM:SS.mmm 형식 시간 입력 — Enter/blur로 커밋, Alt+↑/↓로 100ms씩 조절(참조 사이트 동일 단축키).
+function TimeInput({ label, valueMs, onChange }: { label: string; valueMs: number; onChange: (ms: number) => void }) {
+  const [draft, setDraft] = useState(formatMmSsMs(valueMs));
+  useEffect(() => setDraft(formatMmSsMs(valueMs)), [valueMs]);
+
+  function commit() {
+    const parsed = parseMmSsMs(draft);
+    if (parsed !== null) onChange(parsed);
+    else setDraft(formatMmSsMs(valueMs));
+  }
+
+  return (
+    <label className="space-y-1">
+      <span className="text-white/40">{label}</span>
+      <input
+        type="text"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            commit();
+            e.currentTarget.blur();
+          } else if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+            e.preventDefault();
+            onChange(Math.max(0, valueMs + (e.key === "ArrowUp" ? 100 : -100)));
+          }
+        }}
+        className="w-full rounded border border-white/20 bg-white/5 px-1.5 py-1 font-mono text-white"
+      />
+    </label>
+  );
+}
+
 type PatchBody = Record<string, unknown>;
 
 async function patchClip(projectId: string, clipId: string, body: PatchBody) {
@@ -90,6 +126,8 @@ type Props = {
   projectId: string;
   clip: PersistedTimelineClip;
   track: PersistedTimelineTrack;
+  // 현재 멀티 셀렉트된 클립 전체(트랙 무관 — 사용처에서 clip.trackId로 필터링). 1개 이하면 일반 모드.
+  selectedClips: PersistedTimelineClip[];
   videoWidth: number;
   videoHeight: number;
   canSplit: boolean;
@@ -136,41 +174,33 @@ function BasicInfoTab({
   onCommitTiming,
   extra,
 }: Pick<Props, "clip" | "track" | "canSplit" | "onSplit" | "onDelete" | "onCommitTiming"> & { extra?: React.ReactNode }) {
+  const durationMs = clip.endMs - clip.startMs;
   return (
-    <div className="space-y-2">
-      <div className="space-y-0.5 text-white/50">
-        <p>클립 ID: {clip.id.slice(0, 10)}...</p>
-        <p>트랙: {track.name}</p>
+    <div className="space-y-3">
+      <div className="space-y-1">
+        <p className="font-medium">클립 정보</p>
+        <div className="space-y-0.5 text-white/50">
+          <p>클립 ID: {clip.id.slice(0, 10)}...</p>
+          <p>트랙: {track.name}</p>
+        </div>
       </div>
-      <div className="grid grid-cols-2 gap-2">
-        <label className="space-y-1">
-          <span className="text-white/40">시작(초)</span>
-          <input
-            type="number"
-            step={0.01}
-            className="w-full rounded border border-white/20 bg-white/5 px-1.5 py-1 text-white"
-            value={(clip.startMs / 1000).toFixed(2)}
-            onChange={(e) => {
-              const startMs = Math.round(Number(e.target.value) * 1000);
-              if (Number.isFinite(startMs)) onCommitTiming(clip.id, startMs, clip.endMs);
-            }}
-          />
-        </label>
-        <label className="space-y-1">
-          <span className="text-white/40">종료(초)</span>
-          <input
-            type="number"
-            step={0.01}
-            className="w-full rounded border border-white/20 bg-white/5 px-1.5 py-1 text-white"
-            value={(clip.endMs / 1000).toFixed(2)}
-            onChange={(e) => {
-              const endMs = Math.round(Number(e.target.value) * 1000);
-              if (Number.isFinite(endMs)) onCommitTiming(clip.id, clip.startMs, endMs);
-            }}
-          />
-        </label>
+
+      <div className="space-y-1.5 border-t border-white/10 pt-2">
+        <p className="font-medium">시간</p>
+        <p className="text-white/70">
+          시작: <span className="font-mono">{formatMmSsMs(clip.startMs)}</span>
+          {"  "}끝: <span className="font-mono">{formatMmSsMs(clip.endMs)}</span>
+        </p>
+        <p className="text-white/70">
+          지속: <span className="font-medium text-sky-400">{(durationMs / 1000).toFixed(3)}초</span> ({durationMs}ms)
+        </p>
+        <p className="text-[11px] text-white/40">시간 편집 (MM:SS.mmm 형식, Alt+방향키로 100ms 조절)</p>
+        <div className="grid grid-cols-2 gap-2">
+          <TimeInput label="시작 시간" valueMs={clip.startMs} onChange={(ms) => onCommitTiming(clip.id, ms, clip.endMs)} />
+          <TimeInput label="종료 시간" valueMs={clip.endMs} onChange={(ms) => onCommitTiming(clip.id, clip.startMs, ms)} />
+        </div>
       </div>
-      <p className="text-white/40">지속: {((clip.endMs - clip.startMs) / 1000).toFixed(2)}초</p>
+
       {extra}
       <div className="flex gap-2 pt-1">
         <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={onSplit} disabled={!canSplit}>
@@ -188,6 +218,7 @@ function SubtitleClipProperties({
   projectId,
   clip,
   track,
+  selectedClips,
   videoWidth,
   videoHeight,
   canSplit,
@@ -209,6 +240,16 @@ function SubtitleClipProperties({
   const style = resolveSubtitleStyle(clip.payload.style, videoWidth, videoHeight);
   const dirty = textDraft !== (clip.payload.text ?? "");
 
+  // 같은 트랙(자막)의 클립만 일괄 편집 대상으로 삼는다 — 멀티 셀렉트가 트랙을 넘나들 수 있어서.
+  const sameTrackSelected = selectedClips.filter((c) => c.trackId === clip.trackId);
+  const batchMode = sameTrackSelected.length > 1;
+
+  // "수동 줄바꿈 적용됨": 저장된 텍스트에 이미 개행이 있는데, 지금 기준 글자수로 다시 자동 줄바꿈했을 때와
+  // 결과가 다르면(=자동 줄바꿈 결과가 아니면) 수동으로 편집된 것으로 간주한다.
+  const savedText = clip.payload.text ?? "";
+  const autoWrappedOfSaved = rewrapTextToMaxLineLength(savedText.replace(/\n/g, " "), maxLen);
+  const isManuallyWrapped = savedText.includes("\n") && savedText !== autoWrappedOfSaved;
+
   async function saveText() {
     setSavingText(true);
     try {
@@ -219,7 +260,15 @@ function SubtitleClipProperties({
     }
   }
 
-  async function rewrapNow() {
+  async function handleRewrap() {
+    if (batchMode) {
+      for (const c of sameTrackSelected) {
+        const rewrapped = rewrapTextToMaxLineLength(c.payload.text ?? "", maxLen);
+        await patchClip(projectId, c.id, { text: rewrapped });
+      }
+      onRefetchAll();
+      return;
+    }
     const rewrapped = rewrapTextToMaxLineLength(textDraft, maxLen);
     setTextDraft(rewrapped);
     const updated = await patchClip(projectId, clip.id, { text: rewrapped });
@@ -242,6 +291,10 @@ function SubtitleClipProperties({
 
   return (
     <div className="space-y-3">
+      <p className={cn(batchMode ? "font-medium text-sky-400" : "text-white/50")}>
+        {batchMode ? `${sameTrackSelected.length}개 클립 선택됨 (일괄 편집 모드)` : `subtitle 클립: ${clip.payload.label}`}
+      </p>
+
       <TabBar
         tabs={[
           { key: "basic" as const, label: "기본 정보" },
@@ -266,19 +319,29 @@ function SubtitleClipProperties({
 
       {tab === "text" && (
         <div className="space-y-3">
-          <div className="space-y-1">
-            <span className="text-white/40">자막 텍스트</span>
-            <Textarea
-              value={textDraft}
-              onChange={(e) => setTextDraft(e.target.value)}
-              className="min-h-16 border-white/20 bg-white/5 text-white"
-            />
-            {dirty && (
-              <Button size="sm" onClick={saveText} disabled={savingText}>
-                {savingText ? "저장 중..." : "텍스트 저장"}
-              </Button>
-            )}
-          </div>
+          {batchMode ? (
+            <p className="rounded-md bg-white/5 p-2 text-white/50">
+              {sameTrackSelected.length}개 클립이 선택되어 개별 텍스트 편집은 비활성화됩니다. 자막 재구성은 선택된
+              모든 클립에 각각 적용됩니다.
+            </p>
+          ) : (
+            <div className="space-y-1">
+              <span className="text-white/40">자막 텍스트</span>
+              <Textarea
+                value={textDraft}
+                onChange={(e) => setTextDraft(e.target.value)}
+                className="min-h-16 border-white/20 bg-white/5 text-white"
+              />
+              {isManuallyWrapped && (
+                <p className="font-medium text-amber-400">⚠ 수동 줄바꿈 적용됨 (최대글자수 무시)</p>
+              )}
+              {dirty && (
+                <Button size="sm" onClick={saveText} disabled={savingText}>
+                  {savingText ? "저장 중..." : "텍스트 저장"}
+                </Button>
+              )}
+            </div>
+          )}
           <div className="space-y-1 rounded-md border border-white/10 p-2">
             <p className="font-medium">자막 재구성</p>
             <p className="text-white/40">
@@ -289,8 +352,8 @@ function SubtitleClipProperties({
               <Slider value={[maxLen]} onValueChange={([v]) => setMaxLen(v)} min={8} max={30} step={1} />
               <span className="w-10 shrink-0 text-white/50">{maxLen}자</span>
             </div>
-            <Button size="sm" onClick={rewrapNow}>
-              자막 재구성 (R)
+            <Button size="sm" onClick={handleRewrap}>
+              자막 재구성 (R){batchMode ? ` - ${sameTrackSelected.length}개` : ""}
             </Button>
           </div>
         </div>
@@ -425,6 +488,7 @@ function VideoClipProperties({
   projectId,
   clip,
   track,
+  selectedClips,
   canSplit,
   onSplit,
   onDelete,
@@ -434,6 +498,9 @@ function VideoClipProperties({
   type VideoTab = "basic" | "transform" | "effects" | "transition" | "keyframes" | "special" | "options" | "mask";
   const [tab, setTab] = useState<VideoTab>("basic");
   useEffect(() => setTab("basic"), [clip.id]);
+
+  const sameTrackSelected = selectedClips.filter((c) => c.trackId === clip.trackId);
+  const batchMode = sameTrackSelected.length > 1;
 
   const transform = { ...DEFAULT_VIDEO_TRANSFORM, ...clip.payload.transform };
   const effects = { ...DEFAULT_VIDEO_EFFECTS, ...clip.payload.effects };
@@ -451,6 +518,10 @@ function VideoClipProperties({
 
   return (
     <div className="space-y-3">
+      <p className={cn(batchMode ? "font-medium text-sky-400" : "text-white/50")}>
+        {batchMode ? `${sameTrackSelected.length}개 클립 선택됨 (일괄 편집 모드)` : `video 클립: ${clip.payload.label}`}
+      </p>
+
       <TabBar
         tabs={[
           { key: "basic" as const, label: "기본 정보" },

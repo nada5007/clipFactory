@@ -590,3 +590,20 @@ export function scaleClipsToTargetDuration(
   const scale = targetDurationMs / currentSpan;
   return sorted.map((c) => ({ id: c.id, startMs: Math.round(c.startMs * scale), endMs: Math.round(c.endMs * scale) }));
 }
+
+// 클립 속성 패널 "기본 정보" 탭의 MM:SS.mmm 시간 편집 포맷(참조 사이트 동일 형식, 밀리초 3자리까지).
+export function formatMmSsMs(ms: number): string {
+  const totalMs = Math.max(0, Math.round(ms));
+  const m = Math.floor(totalMs / 60000);
+  const s = Math.floor((totalMs % 60000) / 1000);
+  const msPart = totalMs % 1000;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(msPart).padStart(3, "0")}`;
+}
+
+export function parseMmSsMs(text: string): number | null {
+  const match = text.trim().match(/^(\d{1,3}):(\d{1,2})\.(\d{1,3})$/);
+  if (!match) return null;
+  const [, mm, ss, ms] = match;
+  if (Number(ss) >= 60) return null;
+  return Number(mm) * 60000 + Number(ss) * 1000 + Number(ms.padEnd(3, "0").slice(0, 3));
+}
