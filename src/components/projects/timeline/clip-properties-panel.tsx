@@ -134,9 +134,6 @@ type Props = {
   selectedClips: PersistedTimelineClip[];
   videoWidth: number;
   videoHeight: number;
-  canSplit: boolean;
-  onSplit: () => void;
-  onDelete: () => void;
   onCommitTiming: (clipId: string, startMs: number, endMs: number) => void;
   onPatched: (payload: PersistedTimelineClip["payload"]) => void;
   onRefetchAll: () => void;
@@ -177,12 +174,9 @@ function TabBar<T extends string>({ tabs, active, onChange }: { tabs: { key: T; 
 function BasicInfoTab({
   clip,
   track,
-  canSplit,
-  onSplit,
-  onDelete,
   onCommitTiming,
   extra,
-}: Pick<Props, "clip" | "track" | "canSplit" | "onSplit" | "onDelete" | "onCommitTiming"> & { extra?: React.ReactNode }) {
+}: Pick<Props, "clip" | "track" | "onCommitTiming"> & { extra?: React.ReactNode }) {
   const durationMs = clip.endMs - clip.startMs;
   return (
     <div className="space-y-3">
@@ -211,14 +205,6 @@ function BasicInfoTab({
       </div>
 
       {extra}
-      <div className="flex gap-2 pt-1">
-        <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={onSplit} disabled={!canSplit}>
-          ✂ 분할(재생헤드)
-        </Button>
-        <Button size="sm" variant="destructive" onClick={onDelete}>
-          삭제
-        </Button>
-      </div>
     </div>
   );
 }
@@ -230,9 +216,6 @@ function SubtitleClipProperties({
   selectedClips,
   videoWidth,
   videoHeight,
-  canSplit,
-  onSplit,
-  onDelete,
   onCommitTiming,
   onPatched,
   onRefetchAll,
@@ -315,16 +298,7 @@ function SubtitleClipProperties({
         onChange={setTab}
       />
 
-      {tab === "basic" && (
-        <BasicInfoTab
-          clip={clip}
-          track={track}
-          canSplit={canSplit}
-          onSplit={onSplit}
-          onDelete={onDelete}
-          onCommitTiming={onCommitTiming}
-        />
-      )}
+      {tab === "basic" && <BasicInfoTab clip={clip} track={track} onCommitTiming={onCommitTiming} />}
 
       {tab === "text" && (
         <div className="space-y-3">
@@ -519,9 +493,6 @@ function MediaClipProperties({
   clip,
   track,
   selectedClips,
-  canSplit,
-  onSplit,
-  onDelete,
   onCommitTiming,
   onPatched,
   onMaskTabActiveChange,
@@ -575,9 +546,6 @@ function MediaClipProperties({
         <BasicInfoTab
           clip={clip}
           track={track}
-          canSplit={canSplit}
-          onSplit={onSplit}
-          onDelete={onDelete}
           onCommitTiming={onCommitTiming}
           extra={
             kind === "video" ? (
@@ -935,9 +903,6 @@ function AudioClipProperties({
   projectId,
   clip,
   track,
-  canSplit,
-  onSplit,
-  onDelete,
   onCommitTiming,
   onPatched,
   onRefetchAll,
@@ -980,7 +945,7 @@ function AudioClipProperties({
       />
 
       {tab === "basic" && (
-        <BasicInfoTab clip={clip} track={track} canSplit={canSplit} onSplit={onSplit} onDelete={onDelete} onCommitTiming={onCommitTiming} />
+        <BasicInfoTab clip={clip} track={track} onCommitTiming={onCommitTiming} />
       )}
 
       {tab === "audio" && (

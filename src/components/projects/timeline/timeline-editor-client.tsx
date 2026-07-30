@@ -1,7 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, Maximize2, ZoomIn, ZoomOut } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowLeftRight,
+  ClipboardPaste,
+  Copy,
+  CopyPlus,
+  FoldHorizontal,
+  List,
+  Maximize2,
+  Redo2,
+  Scale,
+  Scissors,
+  SplitSquareHorizontal,
+  Trash2,
+  Undo2,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -9,6 +26,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ScriptPanel } from "@/components/projects/detail/script-panel";
 import { ClipPropertiesPanel } from "@/components/projects/timeline/clip-properties-panel";
 import { TimelineTracks } from "@/components/projects/timeline/timeline-tracks";
@@ -189,6 +207,38 @@ function SubtitleCard({
         </Button>
       )}
     </div>
+  );
+}
+
+// 참조 사이트처럼 편집 도구를 아이콘+마우스오버 툴팁으로 표시한다(§5.5 disclosure).
+function IconToolbarButton({
+  icon: Icon,
+  label,
+  onClick,
+  disabled,
+  destructive,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  destructive?: boolean;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          size="icon"
+          variant={destructive ? "destructive" : "outline"}
+          className={cn("size-7", !destructive && OUTLINE_BTN)}
+          onClick={onClick}
+          disabled={disabled}
+        >
+          <Icon className="size-4" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -975,24 +1025,6 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className={OUTLINE_BTN}
-            onClick={handleUndo}
-            disabled={history.length === 0}
-          >
-            ↶ 실행 취소
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className={OUTLINE_BTN}
-            onClick={handleRedo}
-            disabled={future.length === 0}
-          >
-            ↷ 다시 실행
-          </Button>
           <Button variant="outline" size="sm" className={OUTLINE_BTN} onClick={handleValidate}>
             유효성 검사
           </Button>
@@ -1297,9 +1329,6 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                 selectedClips={selectedClips}
                 videoWidth={videoResolution.width}
                 videoHeight={videoResolution.height}
-                canSplit={canSplit}
-                onSplit={handleSplit}
-                onDelete={handleDeleteClip}
                 onCommitTiming={commitClipTiming}
                 onPatched={(payload) => setTimeline((prev) => (prev ? patchClipInTimeline(prev, selected.clip.id, { payload }) : prev))}
                 onRefetchAll={fetchAll}
@@ -1335,15 +1364,6 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                       }}
                     />
                   </label>
-                </div>
-
-                <div className="flex gap-2 pt-1">
-                  <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={handleSplit} disabled={!canSplit}>
-                    ✂ 분할(재생헤드)
-                  </Button>
-                  <Button size="sm" variant="destructive" onClick={handleDeleteClip}>
-                    삭제
-                  </Button>
                 </div>
               </div>
             ) : (
@@ -1449,93 +1469,75 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
         onSnapChange={setSnapEnabled}
       />
 
-      {/* 편집 도구: 클립보드(복사/잘라내기/붙여넣기/복제/삭제) + 갭 제거 + 호흡구간 + 목표 길이 맞추기 */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
-        <div className="flex items-center gap-1">
-          <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={handleCopy} title="복사 (Ctrl+C)">
-            ⧉ 복사
-          </Button>
-          <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={handleCut} title="잘라내기 (Ctrl+X)">
-            ✂ 잘라내기
-          </Button>
-          <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={handlePaste} title="붙여넣기 (Ctrl+V)">
-            📋 붙여넣기
-          </Button>
-          <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={handleDuplicateSelected} title="복제 (Ctrl+D)">
-            ⿻ 복제
-          </Button>
-          <Button size="sm" variant="destructive" onClick={handleDeleteClip} title="삭제 (Delete)">
-            🗑 삭제
-          </Button>
-        </div>
+      {/* 편집 도구: 참조 사이트처럼 아이콘+마우스오버 툴팁으로 표시(§5.5 disclosure). 호흡구간(ms)/목표
+          길이(초)처럼 수치 입력이 필요한 두 기능만 아이콘 옆에 축소된 select/input을 그대로 둔다. */}
+      <TooltipProvider delayDuration={200}>
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
+          <IconToolbarButton icon={Undo2} label="실행 취소 (Ctrl+Z)" onClick={handleUndo} disabled={history.length === 0} />
+          <IconToolbarButton icon={Redo2} label="다시 실행 (Ctrl+Y)" onClick={handleRedo} disabled={future.length === 0} />
 
-        <span className="text-white/20">|</span>
+          <span className="mx-1 text-white/20">|</span>
 
-        <Button
-          size="sm"
-          variant="outline"
-          className={OUTLINE_BTN}
-          onClick={handleRemoveTrackGaps}
-          disabled={!selected}
-          title="선택한 클립이 속한 트랙의 모든 갭을 제거"
-        >
-          트랙 갭 제거
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className={OUTLINE_BTN}
-          onClick={handleRemoveGapsBetweenSelected}
-          disabled={multiSelectedIds.size < 2}
-          title="Ctrl+클릭으로 2개 이상 선택 후 사용"
-        >
-          선택 사이 갭 제거
-        </Button>
+          <IconToolbarButton icon={SplitSquareHorizontal} label="분할 (S, 재생헤드 위치)" onClick={handleSplit} disabled={!canSplit} />
+          <IconToolbarButton icon={Scissors} label="잘라내기 (Ctrl+X)" onClick={handleCut} />
+          <IconToolbarButton icon={Copy} label="복사 (Ctrl+C)" onClick={handleCopy} />
+          <IconToolbarButton icon={ClipboardPaste} label="붙여넣기 (Ctrl+V)" onClick={handlePaste} />
+          <IconToolbarButton icon={CopyPlus} label="복제 (Ctrl+D)" onClick={handleDuplicateSelected} />
+          <IconToolbarButton icon={Trash2} label="삭제 (Delete)" onClick={handleDeleteClip} destructive />
 
-        <span className="text-white/20">|</span>
+          <span className="mx-1 text-white/20">|</span>
 
-        <div className="flex items-center gap-1">
-          <span>호흡구간</span>
-          <select
-            className="rounded border border-white/20 bg-white/5 px-1 py-1 text-white"
-            value={breathingGapMs}
-            onChange={(e) => setBreathingGapMs(Number(e.target.value))}
-          >
-            {[100, 150, 200, 250, 300, 350, 400, 450, 500].map((ms) => (
-              <option key={ms} value={ms}>
-                {(ms / 1000).toFixed(2)}초
-              </option>
-            ))}
-          </select>
-          <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={handleAddBreathingGaps}>
-            TTS 전체에 추가
-          </Button>
-        </div>
-
-        <span className="text-white/20">|</span>
-
-        <div className="flex items-center gap-1">
-          <span>목표 길이(초)</span>
-          <input
-            type="number"
-            step={0.1}
-            min={0.1}
-            className="w-16 rounded border border-white/20 bg-white/5 px-1.5 py-1 text-white"
-            value={targetLengthSec}
-            onChange={(e) => setTargetLengthSec(Number(e.target.value))}
-          />
-          <Button
-            size="sm"
-            variant="outline"
-            className={OUTLINE_BTN}
-            onClick={handleScaleTrack}
+          <IconToolbarButton
+            icon={List}
+            label="트랙 갭 제거 — 선택한 클립이 속한 트랙의 모든 갭을 제거"
+            onClick={handleRemoveTrackGaps}
             disabled={!selected}
-            title="선택한 클립이 속한 트랙 전체를 비례 조정"
-          >
-            선택 트랙에 적용
-          </Button>
+          />
+          <IconToolbarButton
+            icon={FoldHorizontal}
+            label="선택 사이 갭 제거 — Ctrl+클릭으로 2개 이상 선택 후 사용"
+            onClick={handleRemoveGapsBetweenSelected}
+            disabled={multiSelectedIds.size < 2}
+          />
+
+          <span className="mx-1 text-white/20">|</span>
+
+          <div className="flex items-center gap-1">
+            <IconToolbarButton icon={ArrowLeftRight} label="TTS 전체에 호흡구간 추가" onClick={handleAddBreathingGaps} />
+            <select
+              className="rounded border border-white/20 bg-white/5 px-1 py-1 text-white"
+              value={breathingGapMs}
+              onChange={(e) => setBreathingGapMs(Number(e.target.value))}
+            >
+              {[100, 150, 200, 250, 300, 350, 400, 450, 500].map((ms) => (
+                <option key={ms} value={ms}>
+                  {(ms / 1000).toFixed(2)}초
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <span className="mx-1 text-white/20">|</span>
+
+          <div className="flex items-center gap-1">
+            <IconToolbarButton
+              icon={Scale}
+              label="선택한 클립이 속한 트랙 전체를 목표 길이(초)에 맞춰 비례 조정"
+              onClick={handleScaleTrack}
+              disabled={!selected}
+            />
+            <input
+              type="number"
+              step={0.1}
+              min={0.1}
+              className="w-16 rounded border border-white/20 bg-white/5 px-1.5 py-1 text-white"
+              value={targetLengthSec}
+              onChange={(e) => setTargetLengthSec(Number(e.target.value))}
+            />
+            <span>초</span>
+          </div>
         </div>
-      </div>
+      </TooltipProvider>
 
       <TimelineTracks
         timeline={timeline}
