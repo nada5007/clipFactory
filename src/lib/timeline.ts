@@ -305,6 +305,8 @@ export type PersistedTimelineClip = {
   trackId: string;
   startMs: number;
   endMs: number;
+  // 같은 트랙 안에서 클립끼리 겹칠 때 표출 우선순위(클수록 위). 드래그로 옮길 때마다 갱신된다.
+  zIndex: number;
   payload: PersistedClipPayload;
 };
 
@@ -422,6 +424,31 @@ export type TimelineStats = {
 // 적용된다. order 오름차순(우선순위가 가장 높은 트랙부터)으로 순회하며 각 트랙에서 ms를 덮는 클립을
 // 찾고, 있으면 즉시 반환하며, 없으면 다음 우선순위 트랙으로 내려간다(겹치지 않는 시간대는 아래
 // 트랙이 그대로 비쳐 보이는 레이어 합성과 동일한 동작).
+// 같은 트랙 안에서 클립끼리 자유 드래그로 겹칠 수 있으므로(§1.3 "자유 드래그+오버랩"), 한 시각을
+// 덮는 클립이 여럿이면 zIndex가 가장 높은(가장 최근에 옮긴) 클립을 우선한다.
+export function findTopClipAtMs(clips: PersistedTimelineClip[], ms: number): PersistedTimelineClip | null {
+  const covering = clips.filter((c) => ms >= c.startMs && ms < c.endMs);
+  if (covering.length === 0) return null;
+  return covering.reduce((top, c) => (c.zIndex > top.zIndex ? c : top));
+}
+
+// 같은 트랙 안에서, 시간이 겹치면서 zIndex가 더 높은 클립에 "가려진" 클립들의 id를 반환한다
+// (타임라인 UI에서 주황색 외곽선으로 표시하는 데 쓴다).
+export function computeCoveredClipIds(clips: PersistedTimelineClip[]): Set<string> {
+  const covered = new Set<string>();
+  for (const a of clips) {
+    for (const b of clips) {
+      if (a.id === b.id) continue;
+      const overlaps = a.startMs < b.endMs && b.startMs < a.endMs;
+      if (overlaps && b.zIndex > a.zIndex) {
+        covered.add(a.id);
+        break;
+      }
+    }
+  }
+  return covered;
+}
+
 export function findClipAtMsByPriority(
   tracks: { type: TimelineTrackType; order: number; visible: boolean; clips: PersistedTimelineClip[] }[],
   type: TimelineTrackType,
@@ -431,7 +458,7 @@ export function findClipAtMsByPriority(
     .filter((t) => t.type === type && t.visible !== false)
     .sort((a, b) => a.order - b.order);
   for (const track of sorted) {
-    const clip = track.clips.find((c) => ms >= c.startMs && ms < c.endMs);
+    const clip = findTopClipAtMs(track.clips, ms);
     if (clip) return clip;
   }
   return null;

@@ -9,6 +9,7 @@ import {
   clampClipTiming,
   clampTrimEnd,
   clampTrimStart,
+  computeCoveredClipIds,
   snapToGrid,
   type PersistedTimeline,
   type PersistedTimelineClip,
@@ -238,10 +239,22 @@ export function TimelineTracks({
     clip: PersistedTimelineClip,
     e: React.MouseEvent,
   ) {
-    const sorted = [...track.clips].sort((a, b) => a.startMs - b.startMs);
-    const idx = sorted.findIndex((c) => c.id === clip.id);
-    const minMs = idx > 0 ? sorted[idx - 1].endMs : 0;
-    const maxMs = idx < sorted.length - 1 ? sorted[idx + 1].startMs : Number.MAX_SAFE_INTEGER;
+    // "이동"은 같은 트랙의 다른 클립과 자유롭게 겹칠 수 있다(§1.3 "자유 드래그+오버랩") — 이웃 경계로
+    // 클램프하지 않고 타임라인 전체 범위 안에서만 막는다. 트림(길이 조절)은 기존처럼 이웃 클립 경계로
+    // 클램프해 겹치지 않게 유지한다.
+    let minMs: number;
+    let maxMs: number;
+    if (mode === "move") {
+      // clampClipTiming은 maxMs를 "끝 시각의 상한"으로 보고 내부에서 duration을 빼 시작 시각을 구하므로,
+      // durationMs를 미리 빼지 않고 그대로 전달한다.
+      minMs = 0;
+      maxMs = timeline.durationMs;
+    } else {
+      const sorted = [...track.clips].sort((a, b) => a.startMs - b.startMs);
+      const idx = sorted.findIndex((c) => c.id === clip.id);
+      minMs = idx > 0 ? sorted[idx - 1].endMs : 0;
+      maxMs = idx < sorted.length - 1 ? sorted[idx + 1].startMs : Number.MAX_SAFE_INTEGER;
+    }
 
     interactionRef.current = {
       clipId: clip.id,
@@ -377,7 +390,11 @@ export function TimelineTracks({
             ))}
           </div>
 
-          {timeline.tracks.map((track) => (
+          {timeline.tracks.map((track) => {
+            // 같은 트랙 안에서 자유 드래그로 겹친 클립들 중, zIndex가 더 높은 클립에 가려진 것들을
+            // 주황색 외곽선으로 표시한다(§1.3 "자유 드래그+오버랩").
+            const coveredIds = computeCoveredClipIds(track.clips);
+            return (
             <div key={track.id} className="relative h-14 border-b border-white/5">
               {track.clips.map((clip) => {
                 const isPreview = preview?.clipId === clip.id;
@@ -387,6 +404,7 @@ export function TimelineTracks({
                 const width = Math.max(((endMs - startMs) / 1000) * pxPerSec, 2);
                 const selected = selectedClipId === clip.id;
                 const multiSelected = multiSelectedIds.has(clip.id) && !selected;
+                const covered = coveredIds.has(clip.id);
                 return (
                   <div
                     key={clip.id}
@@ -395,10 +413,11 @@ export function TimelineTracks({
                     className={cn(
                       "absolute top-2 flex h-10 cursor-grab items-center overflow-hidden rounded-sm px-1 text-[10px] text-black/80 active:cursor-grabbing",
                       TRACK_COLORS[track.type],
+                      covered && "ring-2 ring-orange-400",
                       selected && "ring-2 ring-white",
                       multiSelected && "ring-2 ring-sky-400",
                     )}
-                    style={{ left, width }}
+                    style={{ left, width, zIndex: clip.zIndex }}
                   >
                     {width > 24 ? clip.payload.label : ""}
                     <div
@@ -415,7 +434,8 @@ export function TimelineTracks({
                 );
               })}
             </div>
-          ))}
+            );
+          })}
 
           <div
             className="pointer-events-none absolute top-0 bottom-0 w-px bg-red-500"

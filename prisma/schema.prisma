@@ -213,6 +213,9 @@ model TimelineClip {
   track     TimelineTrack @relation(fields: [trackId], references: [id], onDelete: Cascade)
   startMs   Int
   endMs     Int
+  // 같은 트랙 안에서 클립끼리 겹칠 때 표출 우선순위(클수록 위). 드래그로 클립을 옮길 때마다
+  // 같은 트랙 내 최댓값+1로 갱신되어 "방금 옮긴 클립이 항상 최상단"이 되게 한다.
+  zIndex    Int           @default(0)
   // 타입별 내용: { sourceId?, label, text? } — sourceId로 원본 레코드(AudioSegment/ImageAsset 등)와 매칭해
   // "동기화"가 편집된 시간은 보존하고 내용만 갱신할 수 있도록 한다.
   payload   Json

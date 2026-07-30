@@ -143,11 +143,11 @@ describe("getOrSyncTimeline / syncTimeline", () => {
 });
 
 describe("updateClipTiming", () => {
-  it("이웃 클립 경계를 넘지 못하도록 길이를 유지한 채 클램프한다", async () => {
+  it("순수 이동(드래그)은 이웃 클립과 겹쳐도 자유롭게 옮겨지고, zIndex가 트랙 내 최댓값+1로 올라간다", async () => {
     const { channel, project } = await createTestProject({
       segments: [
         { order: 0, text: "첫 문장", startMs: 0, endMs: 1000 },
-        { order: 1, text: "둘째 문장", startMs: 1000, endMs: 2000 },
+        { order: 1, text: "둘째 문장", startMs: 1000, endMs: 3000 },
       ],
       images: [],
     });
@@ -156,11 +156,50 @@ describe("updateClipTiming", () => {
       const clips = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips;
       const firstClip = clips[0];
 
-      // 두 번째 클립(1000~2000) 경계를 넘어가도록 무리하게 옮기려는 시도
+      // 두 번째 클립(1000~3000)과 겹치도록 옮김 — 길이(1000ms)는 그대로라 "순수 이동"으로 인식된다.
       const updated = await updateClipTiming(firstClip.id, { startMs: 1500, endMs: 2500 });
 
-      expect(updated.endMs).toBeLessThanOrEqual(1000); // 다음 클립 시작 전에서 멈춤
-      expect(updated.endMs - updated.startMs).toBe(1000); // 길이(1초)는 유지
+      expect(updated.startMs).toBe(1500);
+      expect(updated.endMs).toBe(2500);
+      expect(updated.zIndex).toBeGreaterThan(clips[1].zIndex);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("순수 이동은 타임라인 범위(0~durationMs) 밖으로는 나가지 못한다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [{ order: 0, text: "문장", startMs: 0, endMs: 1000 }],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const clip = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips[0];
+
+      const updated = await updateClipTiming(clip.id, { startMs: -500, endMs: 500 });
+
+      expect(updated.startMs).toBe(0);
+      expect(updated.endMs).toBe(1000);
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("트림(길이 조절)은 자유 이동 경로를 타지 않고(zIndex 변화 없음) 그대로 반영된다", async () => {
+    const { channel, project } = await createTestProject({
+      segments: [{ order: 0, text: "문장", startMs: 0, endMs: 1000 }],
+      images: [],
+    });
+    try {
+      const timeline = await getOrSyncTimeline(project.id);
+      const clip = timeline!.tracks.find((t) => t.type === "SUBTITLE")!.clips[0];
+
+      // 시작은 그대로 두고 끝만 줄임(길이가 바뀜) — 순수 이동이 아니라 트림으로 인식된다.
+      const updated = await updateClipTiming(clip.id, { startMs: 0, endMs: 800 });
+
+      expect(updated.startMs).toBe(0);
+      expect(updated.endMs).toBe(800);
+      expect(updated.zIndex).toBe(clip.zIndex); // 트림은 우선순위(zIndex)를 바꾸지 않는다
     } finally {
       await cleanup(project.id, channel.id);
     }

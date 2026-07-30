@@ -10,6 +10,7 @@ const clipSchema = z.object({
   trackId: z.string().min(1),
   startMs: z.number().int().min(0),
   endMs: z.number().int().min(0),
+  zIndex: z.number().int().optional(),
   payload: z.record(z.string(), z.unknown()),
 });
 const bodySchema = z.object({ clips: z.array(clipSchema) });

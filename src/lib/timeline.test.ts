@@ -10,7 +10,9 @@ import {
   computeImageRenderSegments,
   computeSplitTimes,
   computeTimelineStats,
+  computeCoveredClipIds,
   findClipAtMsByPriority,
+  findTopClipAtMs,
   formatMmSsMs,
   insertBreathingGaps,
   parseMmSsMs,
@@ -479,9 +481,49 @@ describe("resolveImageKenBurnsTransform", () => {
   });
 });
 
+function makeClip(id: string, startMs: number, endMs: number, zIndex = 0) {
+  return { id, trackId: "x", startMs, endMs, zIndex, payload: { label: id } };
+}
+
+describe("findTopClipAtMs", () => {
+  it("한 시각을 덮는 클립이 하나뿐이면 그것을 반환한다", () => {
+    const clips = [makeClip("a", 0, 1000)];
+    expect(findTopClipAtMs(clips, 500)?.id).toBe("a");
+  });
+
+  it("여러 클립이 겹치면 zIndex가 가장 높은 클립을 반환한다", () => {
+    const clips = [makeClip("old", 0, 1000, 0), makeClip("new", 200, 800, 1)];
+    expect(findTopClipAtMs(clips, 500)?.id).toBe("new");
+  });
+
+  it("겹친 클립의 시간 밖에서는(zIndex 무관) 그 시각을 덮는 클립만 반환한다", () => {
+    const clips = [makeClip("old", 0, 1000, 0), makeClip("new", 200, 800, 1)];
+    // "new"는 800ms까지만 덮으므로 900ms 시점엔 "old"가 보여야 한다(위 트랙에 클립이 없는 구간과 동일한 원리).
+    expect(findTopClipAtMs(clips, 900)?.id).toBe("old");
+  });
+
+  it("아무 클립도 그 시각을 덮지 않으면 null을 반환한다", () => {
+    expect(findTopClipAtMs([makeClip("a", 0, 500)], 900)).toBeNull();
+  });
+});
+
+describe("computeCoveredClipIds", () => {
+  it("겹치지 않으면 아무도 가려지지 않는다", () => {
+    const clips = [makeClip("a", 0, 500, 0), makeClip("b", 500, 1000, 1)];
+    expect(computeCoveredClipIds(clips).size).toBe(0);
+  });
+
+  it("겹치면 zIndex가 낮은 쪽이 가려진 것으로 표시된다", () => {
+    const clips = [makeClip("old", 0, 1000, 0), makeClip("new", 200, 800, 1)];
+    const covered = computeCoveredClipIds(clips);
+    expect(covered.has("old")).toBe(true);
+    expect(covered.has("new")).toBe(false);
+  });
+});
+
 describe("findClipAtMsByPriority", () => {
   function clip(id: string, startMs: number, endMs: number) {
-    return { id, trackId: "x", startMs, endMs, payload: { label: id } };
+    return { id, trackId: "x", startMs, endMs, zIndex: 0, payload: { label: id } };
   }
 
   it("상위(order가 가장 작은) 트랙에 그 시각을 덮는 클립이 있으면 그것을 쓴다", () => {

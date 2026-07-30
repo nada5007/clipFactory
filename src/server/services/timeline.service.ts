@@ -198,22 +198,49 @@ async function getClipWithNeighborBounds(clipId: string) {
   };
 }
 
-// 카드/드래그/트림: 같은 트랙 내 이웃 클립 경계 안으로 클램프해 저장한다.
-// 트림(시작만 또는 끝만 이동)인 경우 sourceOffsetMs를 함께 조정해, 렌더링 시 TTS 원본 오디오에서
-// 실제로 잘라내야 할 지점을 추적한다. 순수 이동(양끝이 같은 폭만큼 이동)이면 원본 재생 구간은 그대로다.
+async function getTrackMaxZIndex(trackId: string, excludeClipId: string): Promise<number> {
+  const result = await prisma.timelineClip.aggregate({
+    where: { trackId, id: { not: excludeClipId } },
+    _max: { zIndex: true },
+  });
+  return result._max.zIndex ?? 0;
+}
+
+// 카드/드래그/트림: 순수 이동(양끝이 같은 폭만큼 이동 = 드래그로 위치만 옮김)은 이웃 클립과 겹쳐도
+// 되는 자유 이동을 허용하고, 옮긴 클립이 항상 위에 보이도록 zIndex를 그 트랙의 최댓값+1로 올린다
+// (§1.3 "자유 드래그+오버랩"). 트림(시작만 또는 끝만 이동)은 기존처럼 이웃 클립 경계 안으로 클램프한다.
+// 트림인 경우 sourceOffsetMs를 함께 조정해, 렌더링 시 TTS 원본 오디오에서 실제로 잘라내야 할 지점을 추적한다.
 export async function updateClipTiming(clipId: string, input: { startMs: number; endMs: number }) {
-  const { clip, minMs, maxMs } = await getClipWithNeighborBounds(clipId);
-  const clamped = clampClipTiming({ startMs: input.startMs, endMs: input.endMs, minMs, maxMs });
+  const clip = await prisma.timelineClip.findUniqueOrThrow({ where: { id: clipId } });
+  const originalDuration = clip.endMs - clip.startMs;
+  const requestedDuration = input.endMs - input.startMs;
+  const isPureMove = requestedDuration === originalDuration;
+
+  let clamped: { startMs: number; endMs: number };
+  let zIndex: number | undefined;
+
+  if (isPureMove) {
+    const timeline = await prisma.timeline.findFirstOrThrow({ where: { tracks: { some: { id: clip.trackId } } } });
+    clamped = clampClipTiming({ startMs: input.startMs, endMs: input.endMs, minMs: 0, maxMs: timeline.durationMs });
+    zIndex = (await getTrackMaxZIndex(clip.trackId, clip.id)) + 1;
+  } else {
+    const { minMs, maxMs } = await getClipWithNeighborBounds(clipId);
+    clamped = clampClipTiming({ startMs: input.startMs, endMs: input.endMs, minMs, maxMs });
+  }
 
   const deltaStart = clamped.startMs - clip.startMs;
   const deltaEnd = clamped.endMs - clip.endMs;
-  const isPureMove = deltaStart === deltaEnd;
+  const stillPureMove = deltaStart === deltaEnd;
   const payload = toClipPayload(clip.payload);
-  const nextSourceOffsetMs = isPureMove ? (payload.sourceOffsetMs ?? 0) : (payload.sourceOffsetMs ?? 0) + deltaStart;
+  const nextSourceOffsetMs = stillPureMove ? (payload.sourceOffsetMs ?? 0) : (payload.sourceOffsetMs ?? 0) + deltaStart;
 
   return prisma.timelineClip.update({
     where: { id: clipId },
-    data: { ...clamped, payload: { ...payload, sourceOffsetMs: nextSourceOffsetMs } satisfies ClipPayload },
+    data: {
+      ...clamped,
+      ...(zIndex !== undefined ? { zIndex } : {}),
+      payload: { ...payload, sourceOffsetMs: nextSourceOffsetMs } satisfies ClipPayload,
+    },
   });
 }
 
@@ -230,7 +257,14 @@ export async function updateClipText(clipId: string, text: string) {
 // 스냅샷에 없는(그 뒤에 새로 생긴) 클립은 삭제하고, 스냅샷에 있는데 지금 없는(그 뒤에 삭제된) 클립은
 // 원래 id 그대로 재생성하며, 남아있는 클립은 시간/payload를 스냅샷 값으로 되돌린다.
 export async function restoreClipsSnapshot(
-  snapshot: { id: string; trackId: string; startMs: number; endMs: number; payload: PersistedClipPayload }[],
+  snapshot: {
+    id: string;
+    trackId: string;
+    startMs: number;
+    endMs: number;
+    zIndex?: number;
+    payload: PersistedClipPayload;
+  }[],
 ) {
   const trackIds = Array.from(new Set(snapshot.map((s) => s.trackId)));
   const current = await prisma.timelineClip.findMany({ where: { trackId: { in: trackIds } } });
@@ -247,9 +281,10 @@ export async function restoreClipsSnapshot(
           trackId: s.trackId,
           startMs: s.startMs,
           endMs: s.endMs,
+          zIndex: s.zIndex ?? 0,
           payload: s.payload as Prisma.InputJsonValue,
         },
-        update: { startMs: s.startMs, endMs: s.endMs, payload: s.payload as Prisma.InputJsonValue },
+        update: { startMs: s.startMs, endMs: s.endMs, zIndex: s.zIndex ?? 0, payload: s.payload as Prisma.InputJsonValue },
       }),
     ),
   ]);
@@ -276,6 +311,7 @@ export async function splitClip(clipId: string, atMs: number) {
         trackId: clip.trackId,
         startMs: result.second.startMs,
         endMs: result.second.endMs,
+        zIndex: clip.zIndex, // 분할 전 우선순위를 두 조각 모두 그대로 유지한다.
         payload: secondPayload as Prisma.InputJsonValue,
       },
     }),

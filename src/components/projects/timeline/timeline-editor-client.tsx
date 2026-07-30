@@ -94,11 +94,18 @@ const ZOOM_MAX = 500;
 // 실행취소/다시실행 스냅샷: 클립의 시간뿐 아니라 payload까지 통째로 담아, 삭제/생성 같은
 // "클립 목록 자체가 바뀌는" 조작도 되돌릴 수 있게 한다(§1.3 disclosure — 되돌리기는 서버의
 // restoreClipsSnapshot이 수행하고, 여기서는 히스토리 스택에 넣을 스냅샷만 만든다).
-type ClipSnapshot = { id: string; trackId: string; startMs: number; endMs: number; payload: PersistedClipPayload }[];
+type ClipSnapshot = {
+  id: string;
+  trackId: string;
+  startMs: number;
+  endMs: number;
+  zIndex: number;
+  payload: PersistedClipPayload;
+}[];
 
 function snapshotClips(timeline: PersistedTimeline): ClipSnapshot {
   return timeline.tracks.flatMap((t) =>
-    t.clips.map((c) => ({ id: c.id, trackId: t.id, startMs: c.startMs, endMs: c.endMs, payload: c.payload })),
+    t.clips.map((c) => ({ id: c.id, trackId: t.id, startMs: c.startMs, endMs: c.endMs, zIndex: c.zIndex, payload: c.payload })),
   );
 }
 
