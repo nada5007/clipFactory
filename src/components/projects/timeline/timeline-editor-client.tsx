@@ -1250,74 +1250,80 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
               </>
             )}
 
-            <div>
-              <p className="mb-1 font-medium">타임라인 통계</p>
-              <div className="grid grid-cols-2 gap-1 text-white/60">
-                <span>트랙 {stats?.trackCount ?? 0}개</span>
-                <span>총 클립 {stats?.totalClips ?? 0}개</span>
-                <span>길이 {(stats?.durationSec ?? 0).toFixed(1)}초</span>
-              </div>
-              <div className="mt-1 flex flex-wrap gap-1">
-                {(stats?.clipCountsByTrack ?? [])
-                  .filter((t) => t.count > 0)
-                  .map((t) => (
-                    <span key={t.name} className="rounded bg-white/10 px-1.5 py-0.5">
-                      {t.name} {t.count}
-                    </span>
-                  ))}
-              </div>
-            </div>
-
-            <div>
-              <label className="mb-1 flex items-center gap-1.5">
-                <Checkbox checked={snapEnabled} onCheckedChange={(v) => setSnapEnabled(Boolean(v))} />
-                스냅 활성화
-              </label>
-              <div className="flex items-center gap-2">
-                <Slider
-                  value={[snapIntervalMs]}
-                  onValueChange={([v]) => setSnapIntervalMs(v)}
-                  min={10}
-                  max={1000}
-                  step={10}
-                  disabled={!snapEnabled}
-                />
-                <span className="w-16 shrink-0 text-white/50">{snapIntervalMs}ms</span>
-              </div>
-            </div>
-
-            <div>
-              <p className="mb-1 font-medium">줌 레벨</p>
-              <div className="flex items-center gap-2">
-                <Slider value={[zoom]} onValueChange={([v]) => setZoom(v)} min={1} max={100} step={1} />
-                <span className="w-12 shrink-0 text-white/50">{zoom}%</span>
-              </div>
-              <div className="mt-1 flex gap-1">
-                {[10, 25, 50, 100].map((preset) => (
-                  <Button
-                    key={preset}
-                    size="sm"
-                    variant="outline"
-                    className={cn("h-6 px-2", OUTLINE_BTN)}
-                    onClick={() => setZoom(preset)}
-                  >
-                    {preset}%
-                  </Button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <p className="mb-1 font-medium">단축키</p>
-              <div className="space-y-0.5 text-white/50">
-                {SHORTCUTS.map((s) => (
-                  <div key={s.key} className="flex justify-between">
-                    <span className="rounded bg-white/10 px-1">{s.key}</span>
-                    <span>{s.label}</span>
+            {/* 클립 미선택 상태에서만 보이는 전역 정보 — 클립을 선택하면(자막/비디오 서브탭이든 일반 패널이든)
+                아래 통계/스냅/줌/단축키가 속성 탭 밑에 계속 깔려 보이던 문제를 막기 위해 !selected로 감쌌다. */}
+            {!selected && (
+              <>
+                <div>
+                  <p className="mb-1 font-medium">타임라인 통계</p>
+                  <div className="grid grid-cols-2 gap-1 text-white/60">
+                    <span>트랙 {stats?.trackCount ?? 0}개</span>
+                    <span>총 클립 {stats?.totalClips ?? 0}개</span>
+                    <span>길이 {(stats?.durationSec ?? 0).toFixed(1)}초</span>
                   </div>
-                ))}
-              </div>
-            </div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {(stats?.clipCountsByTrack ?? [])
+                      .filter((t) => t.count > 0)
+                      .map((t) => (
+                        <span key={t.name} className="rounded bg-white/10 px-1.5 py-0.5">
+                          {t.name} {t.count}
+                        </span>
+                      ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1 flex items-center gap-1.5">
+                    <Checkbox checked={snapEnabled} onCheckedChange={(v) => setSnapEnabled(Boolean(v))} />
+                    스냅 활성화
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <Slider
+                      value={[snapIntervalMs]}
+                      onValueChange={([v]) => setSnapIntervalMs(v)}
+                      min={10}
+                      max={1000}
+                      step={10}
+                      disabled={!snapEnabled}
+                    />
+                    <span className="w-16 shrink-0 text-white/50">{snapIntervalMs}ms</span>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="mb-1 font-medium">줌 레벨</p>
+                  <div className="flex items-center gap-2">
+                    <Slider value={[zoom]} onValueChange={([v]) => setZoom(v)} min={1} max={100} step={1} />
+                    <span className="w-12 shrink-0 text-white/50">{zoom}%</span>
+                  </div>
+                  <div className="mt-1 flex gap-1">
+                    {[10, 25, 50, 100].map((preset) => (
+                      <Button
+                        key={preset}
+                        size="sm"
+                        variant="outline"
+                        className={cn("h-6 px-2", OUTLINE_BTN)}
+                        onClick={() => setZoom(preset)}
+                      >
+                        {preset}%
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <p className="mb-1 font-medium">단축키</p>
+                  <div className="space-y-0.5 text-white/50">
+                    {SHORTCUTS.map((s) => (
+                      <div key={s.key} className="flex justify-between">
+                        <span className="rounded bg-white/10 px-1">{s.key}</span>
+                        <span>{s.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
