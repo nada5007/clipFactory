@@ -404,7 +404,7 @@ function PlaybackToolbar({
   }
 
   return (
-    <div className="flex items-center gap-3 overflow-x-auto border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
+    <div className="flex flex-wrap items-center gap-3 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
       {timeDisplay}
       {playbackControls}
       {rightControls}
@@ -541,6 +541,9 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     [subtitleClips],
   );
   const lintVisible = lint.exceedingIds.length > 0 && !dismissedLints.has("subtitle-line-length");
+  // "품질 분석 (N)" 배지의 N은 문제가 있는 클립 개수가 아니라, 현재 활성화된(무시하지 않은) 품질 검사
+  // "항목" 개수다 — 지금은 "자막 줄 길이" 검사 하나뿐이라 최대 1. 검사 종류가 늘어나면 여기에 더한다.
+  const activeLintCategoryCount = lintVisible ? 1 : 0;
 
   const selected = useMemo(() => findClip(timeline, selectedClipId), [timeline, selectedClipId]);
   const canSplit = selected != null && playheadMs > selected.clip.startMs && playheadMs < selected.clip.endMs;
@@ -1233,7 +1236,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   return (
     <div className="flex h-full flex-col rounded-lg bg-[#0b0d12] text-white">
       {/* 상단 툴바 1행 */}
-      <div className="flex items-center gap-3 overflow-x-auto border-b border-white/10 px-4 py-2">
+      <div className="flex flex-wrap items-center gap-3 border-b border-white/10 px-4 py-2">
         <Link href={`/projects/${projectId}`} className="text-white/60 hover:text-white">
           <ArrowLeft className="size-4" />
         </Link>
@@ -1265,7 +1268,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
             onClick={() => setDismissedLints(new Set())}
             title="무시했던 품질 분석 결과를 다시 표시"
           >
-            품질 분석 {lint.exceedingIds.length > 0 && `(${lint.exceedingIds.length})`}
+            품질 분석 {activeLintCategoryCount > 0 && `(${activeLintCategoryCount})`}
           </Button>
           <Button variant="outline" size="sm" className={OUTLINE_BTN_DISABLED} disabled>
             라이브러리
