@@ -1,23 +1,11 @@
-"use client";
-
 import type { ReactNode } from "react";
-import { usePathname } from "next/navigation";
 
 import { Header } from "@/components/layout/header";
 import { Sidebar } from "@/components/layout/sidebar";
 
-// UI_SPEC.md §5 "타임라인 편집기": 별도 라우트의 풀스크린 다크 테마 편집기라
-// 사이드바/헤더 없이 전체 화면으로 렌더링한다.
-const FULLSCREEN_ROUTE_SUFFIX = "/timeline";
-
+// 사이드바/헤더는 어느 화면(타임라인 편집기 포함)에서도 항상 보인다 — 전체 화면으로 채워야 할 대상은
+// 타임라인 편집기 내부의 미리보기 영상 표시 영역뿐이며, 그건 그 컴포넌트 안에서 처리한다.
 export function AppShell({ children }: { children: ReactNode }) {
-  const pathname = usePathname();
-  const isFullscreen = pathname?.endsWith(FULLSCREEN_ROUTE_SUFFIX) ?? false;
-
-  if (isFullscreen) {
-    return <div className="h-screen overflow-hidden">{children}</div>;
-  }
-
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar />

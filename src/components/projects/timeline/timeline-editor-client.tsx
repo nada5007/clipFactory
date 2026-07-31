@@ -109,10 +109,30 @@ function snapshotClips(timeline: PersistedTimeline): ClipSnapshot {
   );
 }
 
+// 실행취소/다시실행을 서버 왕복(재조회) 없이 화면에 즉시 반영하기 위한 낙관적 적용. 실제 영속화는
+// 별도로 서버에 PUT하고, 실패했을 때만 fetchAll()로 진실을 다시 가져온다.
+function applyClipSnapshot(timeline: PersistedTimeline, snapshot: ClipSnapshot): PersistedTimeline {
+  const byTrack = new Map<string, ClipSnapshot>();
+  for (const s of snapshot) {
+    const arr = byTrack.get(s.trackId) ?? [];
+    arr.push(s);
+    byTrack.set(s.trackId, arr);
+  }
+  return {
+    ...timeline,
+    tracks: timeline.tracks.map((t) => {
+      const clips = (byTrack.get(t.id) ?? [])
+        .map((s) => ({ id: s.id, trackId: s.trackId, startMs: s.startMs, endMs: s.endMs, zIndex: s.zIndex, payload: s.payload }))
+        .sort((a, b) => a.startMs - b.startMs);
+      return { ...t, clips };
+    }),
+  };
+}
+
 function patchClipInTimeline(
   timeline: PersistedTimeline,
   clipId: string,
-  patch: Partial<Pick<PersistedTimelineClip, "startMs" | "endMs" | "payload">>,
+  patch: Partial<Pick<PersistedTimelineClip, "startMs" | "endMs" | "zIndex" | "payload">>,
 ): PersistedTimeline {
   return {
     ...timeline,
@@ -298,6 +318,13 @@ function PlaybackToolbar({
   // 감춘다 — 아이콘까지 함께 있으면 좁은 화면에서 배치가 찌그러지기 때문(기본값 true).
   showSpeedAndZoom?: boolean;
 }) {
+  // 참조 사이트 캡처 기준: 현재 재생 시각/총 길이 표시는 재생 버튼 그룹보다 왼쪽에 온다.
+  const timeDisplay = (
+    <span className="shrink-0">
+      {(playheadMs / 1000).toFixed(2)}s / {(durationMs / 1000).toFixed(2)}s
+    </span>
+  );
+
   const playbackControls = (
     <div className="flex items-center gap-2 text-sm">
       <button onClick={onSeekStart} className="text-white/60 hover:text-white" title="처음으로 (Home)">
@@ -328,9 +355,6 @@ function PlaybackToolbar({
           <span className="w-9 shrink-0">{playbackSpeed.toFixed(1)}x</span>
         </div>
       )}
-      <span className="shrink-0">
-        {(playheadMs / 1000).toFixed(2)}s / {(durationMs / 1000).toFixed(2)}s
-      </span>
       {showSpeedAndZoom && (
         <div className="flex items-center gap-1.5">
           <ZoomOut className="size-3.5 text-white/40" />
@@ -362,7 +386,10 @@ function PlaybackToolbar({
   if (editTools) {
     return (
       <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
-        {playbackControls}
+        <div className="flex items-center gap-3">
+          {timeDisplay}
+          {playbackControls}
+        </div>
         <div className="flex flex-wrap items-center justify-center gap-1.5">{editTools}</div>
         <div className="flex items-center gap-3">{rightControls}</div>
       </div>
@@ -371,6 +398,7 @@ function PlaybackToolbar({
 
   return (
     <div className="flex items-center gap-3 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
+      {timeDisplay}
       {playbackControls}
       {rightControls}
     </div>
@@ -592,20 +620,38 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     ? resolveImageKenBurnsTransform(previewImageClip.payload.effects, previewImageClip.id, previewImageProgress)
     : "";
 
-  // 미리보기는 브라우저에 실제 해상도(예: 1080x1920)보다 작게 그려지므로, 컨테이너의 실측 너비를 재서
-  // 폰트 크기/위치/테두리 두께 같은 절대 px 값들을 그 비율만큼 축소해 실제 영상과 같은 비율로 보이게 한다.
+  // 미리보기 영상 박스 크기: CSS aspect-ratio + 뷰포트 기준 max-h만으로는 좌측 콘텐츠 영역(속성 패널
+  // 폭 조절에 따라 크기가 바뀜)에 꽉 차게 맞추기 어려워, 바깥 래퍼의 실측 크기를 ResizeObserver로 재서
+  // 영상 실제 해상도 비율에 맞는 "contain" 크기(가로/세로 중 더 좁은 쪽에 맞춰 나머지를 비율대로 줄임)를
+  // 직접 계산한다. 속성 패널 폭 조절 바를 드래그해도 이 관찰이 다시 실행되어 자동으로 꽉 채운다.
+  const previewWrapperRef = useRef<HTMLDivElement>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
-  const [previewScale, setPreviewScale] = useState(1);
+  const [previewBoxSize, setPreviewBoxSize] = useState({ width: 0, height: 0 });
   useEffect(() => {
     if (activeTab !== "preview") return;
-    const el = previewContainerRef.current;
-    if (!el) return;
-    const update = () => setPreviewScale(el.clientWidth / videoResolution.width);
+    const wrapper = previewWrapperRef.current;
+    if (!wrapper) return;
+    const targetRatio = videoResolution.width / videoResolution.height;
+    const update = () => {
+      const availW = wrapper.clientWidth;
+      const availH = wrapper.clientHeight;
+      if (availW <= 0 || availH <= 0) return;
+      let width = availW;
+      let height = width / targetRatio;
+      if (height > availH) {
+        height = availH;
+        width = height * targetRatio;
+      }
+      setPreviewBoxSize({ width, height });
+    };
     update();
     const observer = new ResizeObserver(update);
-    observer.observe(el);
+    observer.observe(wrapper);
     return () => observer.disconnect();
-  }, [activeTab, videoResolution.width]);
+  }, [activeTab, videoResolution.width, videoResolution.height]);
+  // 폰트 크기/위치/테두리 두께 같은 절대 px 값들을 실제 해상도 대비 미리보기 박스 크기 비율만큼
+  // 축소해, 실제 영상과 같은 비율로 보이게 한다.
+  const previewScale = previewBoxSize.width > 0 ? previewBoxSize.width / videoResolution.width : 1;
 
   function playTtsFrom(atMs: number) {
     const ttsClips = getTrackClips("TTS");
@@ -735,7 +781,13 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
         if (res.ok) {
           const updated = await res.json();
           setTimeline((prev) =>
-            prev ? patchClipInTimeline(prev, clipId, { startMs: updated.startMs, endMs: updated.endMs }) : prev,
+            prev
+              ? patchClipInTimeline(prev, clipId, {
+                  startMs: updated.startMs,
+                  endMs: updated.endMs,
+                  zIndex: updated.zIndex,
+                })
+              : prev,
           );
         } else {
           await fetchAll();
@@ -766,12 +818,18 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     const prevSnapshot = history[history.length - 1];
     setFuture((f) => [...f, snapshotClips(timeline)]);
     setHistory((h) => h.slice(0, -1));
-    await fetch(`/api/projects/${projectId}/timeline/clips/snapshot`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clips: prevSnapshot }),
-    });
-    await fetchAll();
+    // 참조 사이트처럼 리프레시 없이 즉시 반영 — 서버 응답을 기다리지 않고 먼저 화면에 적용한다.
+    setTimeline((prev) => (prev ? applyClipSnapshot(prev, prevSnapshot) : prev));
+    try {
+      const res = await fetch(`/api/projects/${projectId}/timeline/clips/snapshot`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clips: prevSnapshot }),
+      });
+      if (!res.ok) await fetchAll();
+    } catch {
+      await fetchAll();
+    }
   }, [history, timeline, projectId, fetchAll]);
 
   const handleRedo = useCallback(async () => {
@@ -779,12 +837,17 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     const nextSnapshot = future[future.length - 1];
     setHistory((h) => [...h, snapshotClips(timeline)]);
     setFuture((f) => f.slice(0, -1));
-    await fetch(`/api/projects/${projectId}/timeline/clips/snapshot`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clips: nextSnapshot }),
-    });
-    await fetchAll();
+    setTimeline((prev) => (prev ? applyClipSnapshot(prev, nextSnapshot) : prev));
+    try {
+      const res = await fetch(`/api/projects/${projectId}/timeline/clips/snapshot`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clips: nextSnapshot }),
+      });
+      if (!res.ok) await fetchAll();
+    } catch {
+      await fetchAll();
+    }
   }, [future, timeline, projectId, fetchAll]);
 
   useEffect(() => {
@@ -1100,14 +1163,14 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
 
   if (loading || !timeline) {
     return (
-      <div className="flex h-screen items-center justify-center bg-[#0b0d12] text-sm text-white/70">
+      <div className="flex h-full items-center justify-center rounded-lg bg-[#0b0d12] text-sm text-white/70">
         불러오는 중...
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen flex-col bg-[#0b0d12] text-white">
+    <div className="flex h-full flex-col rounded-lg bg-[#0b0d12] text-white">
       {/* 상단 툴바 1행 */}
       <div className="flex items-center gap-3 border-b border-white/10 px-4 py-2">
         <Link href={`/projects/${projectId}`} className="text-white/60 hover:text-white">
@@ -1224,13 +1287,11 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
             </div>
           )}
           {activeTab === "preview" && (
-            <div className="flex h-full items-center justify-center">
+            <div ref={previewWrapperRef} className="flex h-full w-full items-center justify-center">
               <div
                 ref={previewContainerRef}
-                className={cn(
-                  "relative overflow-hidden rounded-lg bg-black",
-                  project?.videoFormat === "SHORT" ? "aspect-[9/16] h-full max-h-[70vh]" : "aspect-video w-full max-w-2xl",
-                )}
+                className="relative overflow-hidden rounded-lg bg-black"
+                style={{ width: previewBoxSize.width || undefined, height: previewBoxSize.height || undefined }}
               >
                 {previewImageClip?.payload.sourceId ? (
                   <>
