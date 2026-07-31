@@ -1,4 +1,4 @@
-import { getAudioDurationMs } from "@/lib/ffmpeg";
+import { extractAudioTrack, getAudioDurationMs } from "@/lib/ffmpeg";
 import { prisma } from "@/lib/prisma";
 import { ensureProjectDir, resolveProjectFilePath, writeProjectFile } from "@/lib/storage";
 import { addUploadedMediaClip } from "@/server/services/timeline.service";
@@ -70,5 +70,45 @@ export async function uploadMediaToTrack(projectId: string, trackId: string, atM
   }
 
   const media = await uploadMedia(projectId, kind, { buffer: file.buffer, mimeType: file.mimeType });
-  return addUploadedMediaClip(trackId, atMs, { id: media.id, kind, durationMs: media.durationMs, label: file.name });
+  const clip = await addUploadedMediaClip(trackId, atMs, { id: media.id, kind, durationMs: media.durationMs, label: file.name });
+
+  if (kind === "video") {
+    // 실패해도(오디오 트랙이 없는 영상 등) 비디오 업로드 자체는 이미 끝난 뒤라 조용히 건너뛴다.
+    await addVideoAudioToTrack(projectId, media, atMs).catch(() => {});
+  }
+
+  return clip;
+}
+
+// 비디오 클립 업로드 시 그 오디오를 뽑아 "비디오 오디오"(AUDIO) 트랙 같은 위치에 자동으로 추가한다.
+async function addVideoAudioToTrack(
+  projectId: string,
+  videoMedia: { filePath: string },
+  atMs: number,
+): Promise<void> {
+  const timeline = await prisma.timeline.findUnique({ where: { projectId } });
+  if (!timeline) return;
+  const audioTrack = await prisma.timelineTrack.findFirst({
+    where: { timelineId: timeline.id, type: "AUDIO", autoSync: true },
+  });
+  if (!audioTrack) return;
+
+  await ensureProjectDir(projectId, "uploads");
+  const audioFileName = `uploads/audio_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.mp3`;
+  const extracted = await extractAudioTrack(
+    resolveProjectFilePath(projectId, videoMedia.filePath),
+    resolveProjectFilePath(projectId, audioFileName),
+  );
+  if (!extracted) return; // 무음 영상 등 오디오 스트림이 없는 경우
+
+  const durationMs = await getAudioDurationMs(resolveProjectFilePath(projectId, audioFileName));
+  const audioMedia = await prisma.uploadedMedia.create({
+    data: { projectId, kind: "audio", filePath: audioFileName, durationMs },
+  });
+  await addUploadedMediaClip(audioTrack.id, atMs, {
+    id: audioMedia.id,
+    kind: "audio",
+    durationMs,
+    label: "비디오 오디오",
+  });
 }

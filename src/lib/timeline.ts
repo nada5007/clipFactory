@@ -449,17 +449,22 @@ export function computeCoveredClipIds(clips: PersistedTimelineClip[]): Set<strin
   return covered;
 }
 
+// types를 배열로 받는 이유: VIDEO/IMAGE처럼 서로 다른 트랙 "타입"이어도 미리보기 화면에서는 같은
+// 시각적 슬롯을 두고 경쟁한다(트랙 순서를 바꿔 비디오를 이미지보다 위로 올리면 그 구간엔 비디오가
+// 보여야 함). SUBTITLE처럼 혼자만 경쟁하는 경우엔 배열에 하나만 넣어 호출한다. 어느 트랙 타입이
+// 이겼는지 알아야 자막으로 그릴지/비디오 엘리먼트로 재생할지 등을 정할 수 있어 trackType도 함께 반환한다.
 export function findClipAtMsByPriority(
   tracks: { type: TimelineTrackType; order: number; visible: boolean; clips: PersistedTimelineClip[] }[],
-  type: TimelineTrackType,
+  types: TimelineTrackType[],
   ms: number,
-): PersistedTimelineClip | null {
+): { clip: PersistedTimelineClip; trackType: TimelineTrackType } | null {
+  const typeSet = new Set(types);
   const sorted = tracks
-    .filter((t) => t.type === type && t.visible !== false)
+    .filter((t) => typeSet.has(t.type) && t.visible !== false)
     .sort((a, b) => a.order - b.order);
   for (const track of sorted) {
     const clip = findTopClipAtMs(track.clips, ms);
-    if (clip) return clip;
+    if (clip) return { clip, trackType: track.type };
   }
   return null;
 }

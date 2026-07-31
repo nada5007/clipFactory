@@ -532,7 +532,7 @@ describe("findClipAtMsByPriority", () => {
       { type: "IMAGE" as const, order: 0, visible: true, clips: [clip("top", 0, 1000)] },
       { type: "IMAGE" as const, order: 1, visible: true, clips: [clip("bottom", 0, 1000)] },
     ];
-    expect(findClipAtMsByPriority(tracks, "IMAGE", 500)?.id).toBe("top");
+    expect(findClipAtMsByPriority(tracks, ["IMAGE"], 500)?.clip.id).toBe("top");
   });
 
   it("상위 트랙에 그 시각을 덮는 클립이 없으면 다음 우선순위 트랙으로 내려간다", () => {
@@ -541,7 +541,7 @@ describe("findClipAtMsByPriority", () => {
       { type: "IMAGE" as const, order: 1, visible: true, clips: [clip("bottom", 0, 1000)] },
     ];
     // top 트랙은 500ms까지만 클립이 있어 그 뒤(700ms)는 bottom 트랙이 비쳐 보여야 한다.
-    expect(findClipAtMsByPriority(tracks, "IMAGE", 700)?.id).toBe("bottom");
+    expect(findClipAtMsByPriority(tracks, ["IMAGE"], 700)?.clip.id).toBe("bottom");
   });
 
   it("숨긴(visible=false) 트랙은 우선순위가 높아도 건너뛴다", () => {
@@ -549,12 +549,33 @@ describe("findClipAtMsByPriority", () => {
       { type: "IMAGE" as const, order: 0, visible: false, clips: [clip("hidden", 0, 1000)] },
       { type: "IMAGE" as const, order: 1, visible: true, clips: [clip("visible", 0, 1000)] },
     ];
-    expect(findClipAtMsByPriority(tracks, "IMAGE", 500)?.id).toBe("visible");
+    expect(findClipAtMsByPriority(tracks, ["IMAGE"], 500)?.clip.id).toBe("visible");
   });
 
   it("어느 트랙에도 그 시각을 덮는 클립이 없으면 null을 반환한다", () => {
     const tracks = [{ type: "IMAGE" as const, order: 0, visible: true, clips: [clip("a", 0, 500)] }];
-    expect(findClipAtMsByPriority(tracks, "IMAGE", 900)).toBeNull();
+    expect(findClipAtMsByPriority(tracks, ["IMAGE"], 900)).toBeNull();
+  });
+
+  it("타입을 여러 개 넘기면 서로 다른 트랙 타입끼리도 order로 경쟁해, 이긴 트랙 타입도 함께 반환한다", () => {
+    const tracks = [
+      { type: "IMAGE" as const, order: 0, visible: true, clips: [clip("img", 0, 1000)] },
+      { type: "VIDEO" as const, order: 1, visible: true, clips: [clip("vid", 0, 1000)] },
+    ];
+    // 이미지 트랙이 order 0(우선순위 최상단)이라 비디오가 있어도 이미지가 이긴다.
+    const result = findClipAtMsByPriority(tracks, ["VIDEO", "IMAGE"], 500);
+    expect(result?.clip.id).toBe("img");
+    expect(result?.trackType).toBe("IMAGE");
+  });
+
+  it("비디오 트랙을 이미지보다 위로 올리면(order를 더 작게) 겹치는 구간에서 비디오가 이긴다", () => {
+    const tracks = [
+      { type: "VIDEO" as const, order: 0, visible: true, clips: [clip("vid", 0, 1000)] },
+      { type: "IMAGE" as const, order: 1, visible: true, clips: [clip("img", 0, 1000)] },
+    ];
+    const result = findClipAtMsByPriority(tracks, ["VIDEO", "IMAGE"], 500);
+    expect(result?.clip.id).toBe("vid");
+    expect(result?.trackType).toBe("VIDEO");
   });
 });
 

@@ -155,6 +155,19 @@ export async function generateSilence(durationSec: number, outputPath: string): 
   ]);
 }
 
+// 업로드한 비디오 클립의 오디오만 뽑아 "비디오 오디오" 트랙에 자동으로 추가하기 위해 쓴다.
+// 오디오 스트림이 없는 영상(무음 영상 등)이면 ffmpeg가 실패하는데, 이 경우 조용히 false를 반환해
+// 호출하는 쪽에서 "오디오 트랙 자동 추가"만 건너뛰고 비디오 업로드 자체는 계속 진행할 수 있게 한다.
+export async function extractAudioTrack(videoPath: string, outputPath: string): Promise<boolean> {
+  try {
+    await execFileAsync(FFMPEG_BIN, ["-y", "-i", videoPath, "-vn", "-acodec", "libmp3lame", "-q:a", "2", outputPath]);
+    return true;
+  } catch {
+    await fs.rm(outputPath, { force: true }).catch(() => {});
+    return false;
+  }
+}
+
 // ffmpeg-full(libass 포함) 빌드가 필요하다 — 기본 ffmpeg 포뮬러에는 ass/subtitles 필터가 없다.
 export async function burnSubtitles(inputVideoPath: string, assPath: string, outputPath: string): Promise<void> {
   const dir = path.dirname(assPath);

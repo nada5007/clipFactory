@@ -453,6 +453,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const [bgmSettings, setBgmSettings] = useState<BgmSettings | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement>(null);
   const bgmAudioRef = useRef<HTMLAudioElement>(null);
+  const previewVideoRef = useRef<HTMLVideoElement>(null);
   const currentTtsClipIdRef = useRef<string | null>(null);
 
   const [rightPanelWidth, setRightPanelWidth] = useState(RIGHT_PANEL_DEFAULT_WIDTH);
@@ -614,11 +615,15 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   }
 
   const activeSubtitleClip = isPlaying
-    ? findClipAtMsByPriority(timeline?.tracks ?? [], "SUBTITLE", playheadMs)
+    ? (findClipAtMsByPriority(timeline?.tracks ?? [], ["SUBTITLE"], playheadMs)?.clip ?? null)
     : null;
-  // 미리보기 탭 합성용: 재생 여부와 무관하게 항상 현재 재생헤드 위치의 이미지/자막을 보여준다.
-  const previewImageClip = findClipAtMsByPriority(timeline?.tracks ?? [], "IMAGE", playheadMs);
-  const previewSubtitleClip = findClipAtMsByPriority(timeline?.tracks ?? [], "SUBTITLE", playheadMs);
+  // 미리보기 탭 합성용: 재생 여부와 무관하게 항상 현재 재생헤드 위치의 화면/자막을 보여준다.
+  // VIDEO/IMAGE는 트랙 타입이 달라도 미리보기에서는 같은 화면 슬롯을 두고 order로 경쟁한다 — 비디오
+  // 트랙을 이미지보다 위로 올리면 그 구간엔 비디오가 보여야 한다(§1.3 disclosure).
+  const previewVisual = findClipAtMsByPriority(timeline?.tracks ?? [], ["VIDEO", "IMAGE"], playheadMs);
+  const previewVideoClip = previewVisual?.trackType === "VIDEO" ? previewVisual.clip : null;
+  const previewImageClip = previewVisual?.trackType === "IMAGE" ? previewVisual.clip : null;
+  const previewSubtitleClip = findClipAtMsByPriority(timeline?.tracks ?? [], ["SUBTITLE"], playheadMs)?.clip ?? null;
   // 스타일 탭에서 설정한 폰트/크기/색상/배경/위치/테두리가 실제 렌더링(ASS 번인)과 동일하게 반영되도록,
   // 하드코딩된 스타일 대신 resolveSubtitleStyle 결과를 그대로 쓴다.
   const previewSubtitleStyle = previewSubtitleClip
@@ -632,6 +637,18 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const previewImageTransform = previewImageClip
     ? resolveImageKenBurnsTransform(previewImageClip.payload.effects, previewImageClip.id, previewImageProgress)
     : "";
+  // 비디오도 이미지와 같은 색보정 필터를 근사 적용한다(패닝/줌은 비디오엔 의미가 없어 제외).
+  const previewVideoFilter = previewVideoClip ? resolveImageEffectsFilter(previewVideoClip.payload.effects) : "";
+
+  // 재생 중이 아닐 때(스크러빙)만 비디오 재생 위치를 강제로 맞춘다 — 재생 중에 매 프레임 되감으면
+  // 끊겨 보이므로, 재생 시작/탐색 시점에는 playPreviewVideoFrom이 대신 처리한다.
+  useEffect(() => {
+    if (isPlaying) return;
+    const video = previewVideoRef.current;
+    if (!video || !previewVideoClip) return;
+    const localSec = (playheadMs - previewVideoClip.startMs + (previewVideoClip.payload.sourceOffsetMs ?? 0)) / 1000;
+    if (Number.isFinite(localSec)) video.currentTime = Math.max(0, localSec);
+  }, [playheadMs, previewVideoClip, isPlaying]);
 
   // 미리보기 영상 박스 크기: CSS aspect-ratio + 뷰포트 기준 max-h만으로는 좌측 콘텐츠 영역(속성 패널
   // 폭 조절에 따라 크기가 바뀜)에 꽉 차게 맞추기 어려워, 바깥 래퍼의 실측 크기를 ResizeObserver로 재서
@@ -715,9 +732,20 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     audio.play().catch(() => {});
   }
 
+  // VIDEO 클립 미리보기 재생 — 실제 재생 중에는(자연스러운 프레임 진행을 위해) 강제로 되감지 않고,
+  // 재생을 "시작"할 때와 탐색(seek)할 때만 currentTime을 맞춘다.
+  function playPreviewVideoFrom(atMs: number) {
+    const video = previewVideoRef.current;
+    if (!video || !previewVideoClip) return;
+    const localSec = (atMs - previewVideoClip.startMs + (previewVideoClip.payload.sourceOffsetMs ?? 0)) / 1000;
+    video.currentTime = Math.max(0, localSec);
+    video.play().catch(() => {});
+  }
+
   function stopPlayback() {
     ttsAudioRef.current?.pause();
     bgmAudioRef.current?.pause();
+    previewVideoRef.current?.pause();
     setIsPlaying(false);
   }
 
@@ -729,6 +757,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     setIsPlaying(true);
     playTtsFrom(playheadMs);
     playBgmFrom(playheadMs);
+    playPreviewVideoFrom(playheadMs);
   }
 
   function seekTo(ms: number) {
@@ -737,6 +766,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     if (isPlaying) {
       playTtsFrom(clamped);
       playBgmFrom(clamped);
+      playPreviewVideoFrom(clamped);
     }
   }
 
@@ -1364,7 +1394,21 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                 className="relative overflow-hidden rounded-lg bg-black"
                 style={{ width: previewBoxSize.width || undefined, height: previewBoxSize.height || undefined }}
               >
-                {previewImageClip?.payload.sourceId ? (
+                {previewVideoClip?.payload.mediaId ? (
+                  // eslint-disable-next-line jsx-a11y/media-has-caption
+                  <video
+                    key={previewVideoClip.id}
+                    ref={previewVideoRef}
+                    src={`/api/projects/${projectId}/media/${previewVideoClip.payload.mediaId}/file`}
+                    className="size-full object-cover"
+                    style={{ filter: previewVideoFilter || undefined }}
+                    // 비디오 자체 오디오는 항상 음소거한다 — 소리는 업로드 시 자동으로 만들어지는 "비디오
+                    // 오디오" 트랙의 별도 클립이 담당하는 구조다(다만 그 트랙의 실제 재생 연결은 아직
+                    // 미구현 — TTS/BGM만 실제로 재생되는 기존 범위와 동일한 디스클로저).
+                    muted
+                    playsInline
+                  />
+                ) : previewImageClip?.payload.sourceId ? (
                   <>
                     {previewImageClip.payload.mask && (
                       <svg width="0" height="0" className="absolute">
