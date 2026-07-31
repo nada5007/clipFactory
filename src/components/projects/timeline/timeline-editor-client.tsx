@@ -619,10 +619,18 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const activeSubtitleClip = isPlaying
     ? (findClipAtMsByPriority(timeline?.tracks ?? [], ["SUBTITLE"], playheadMs)?.clip ?? null)
     : null;
+  // 마스크 탭이 열려 있는 동안은, 편집 중인 클립이 우선순위 경쟁에서 밀려(예: 상위 우선순위 비디오
+  // 트랙이 같은 구간을 덮는 경우) 화면에 안 보이더라도 항상 그 클립 자체를 미리보기에 강제로 표시한다
+  // — 그래야 마스크 점선 오버레이가 실제로 보이는 화면 위에 그려진다(선택 시 재생헤드를 클립 구간으로
+  // 옮기는 기존 설계 의도를, 우선순위 합성 도입 이후에도 마스크 편집 중에는 유지한다).
+  const maskEditOverride =
+    maskTabActive && selected && selected.clip.payload.mask && (selected.track.type === "VIDEO" || selected.track.type === "IMAGE")
+      ? { clip: selected.clip, trackType: selected.track.type, mask: selected.clip.payload.mask }
+      : null;
   // 미리보기 탭 합성용: 재생 여부와 무관하게 항상 현재 재생헤드 위치의 화면/자막을 보여준다.
   // VIDEO/IMAGE는 트랙 타입이 달라도 미리보기에서는 같은 화면 슬롯을 두고 order로 경쟁한다 — 비디오
   // 트랙을 이미지보다 위로 올리면 그 구간엔 비디오가 보여야 한다(§1.3 disclosure).
-  const previewVisual = findClipAtMsByPriority(timeline?.tracks ?? [], ["VIDEO", "IMAGE"], playheadMs);
+  const previewVisual = maskEditOverride ?? findClipAtMsByPriority(timeline?.tracks ?? [], ["VIDEO", "IMAGE"], playheadMs);
   const previewVideoClip = previewVisual?.trackType === "VIDEO" ? previewVisual.clip : null;
   const previewImageClip = previewVisual?.trackType === "IMAGE" ? previewVisual.clip : null;
   const previewSubtitleClip = findClipAtMsByPriority(timeline?.tracks ?? [], ["SUBTITLE"], playheadMs)?.clip ?? null;
@@ -1499,18 +1507,15 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                     {previewSubtitleClip.payload.text}
                   </p>
                 )}
-                {maskTabActive &&
-                  selected?.track.type === "IMAGE" &&
-                  previewImageClip?.id === selected.clip.id &&
-                  previewImageClip.payload.mask && (
-                    <MaskOverlay
-                      clipId={previewImageClip.id}
-                      mask={previewImageClip.payload.mask}
-                      containerWidthPx={videoResolution.width * previewScale}
-                      containerHeightPx={videoResolution.height * previewScale}
-                      onPatch={(mask) => handleMaskPatch(previewImageClip.id, mask)}
-                    />
-                  )}
+                {maskEditOverride && (
+                  <MaskOverlay
+                    clipId={maskEditOverride.clip.id}
+                    mask={maskEditOverride.mask}
+                    containerWidthPx={videoResolution.width * previewScale}
+                    containerHeightPx={videoResolution.height * previewScale}
+                    onPatch={(mask) => handleMaskPatch(maskEditOverride.clip.id, mask)}
+                  />
+                )}
               </div>
             </div>
           )}
