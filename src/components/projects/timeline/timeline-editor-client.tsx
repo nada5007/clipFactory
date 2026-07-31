@@ -392,19 +392,19 @@ function PlaybackToolbar({
   // 가운데 열이 남는 공간을 모두 차지해 좌우 콘텐츠 폭과 무관하게 항상 중앙에 오도록 한다.
   if (editTools) {
     return (
-      <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
-        <div className="flex items-center gap-3">
+      <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 overflow-x-auto border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
+        <div className="flex shrink-0 items-center gap-3">
           {timeDisplay}
           {playbackControls}
         </div>
         <div className="flex flex-wrap items-center justify-center gap-1.5">{editTools}</div>
-        <div className="flex items-center gap-3">{rightControls}</div>
+        <div className="flex shrink-0 items-center gap-3">{rightControls}</div>
       </div>
     );
   }
 
   return (
-    <div className="flex items-center gap-3 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
+    <div className="flex items-center gap-3 overflow-x-auto border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
       {timeDisplay}
       {playbackControls}
       {rightControls}
@@ -1233,7 +1233,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   return (
     <div className="flex h-full flex-col rounded-lg bg-[#0b0d12] text-white">
       {/* 상단 툴바 1행 */}
-      <div className="flex items-center gap-3 border-b border-white/10 px-4 py-2">
+      <div className="flex items-center gap-3 overflow-x-auto border-b border-white/10 px-4 py-2">
         <Link href={`/projects/${projectId}`} className="text-white/60 hover:text-white">
           <ArrowLeft className="size-4" />
         </Link>
