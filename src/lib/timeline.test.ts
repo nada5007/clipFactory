@@ -12,6 +12,7 @@ import {
   computeRulerStepSec,
   computeTimelineStats,
   computeCoveredClipIds,
+  computeVisualRenderSegments,
   findClipAtMsByPriority,
   findTopClipAtMs,
   formatMmSsMs,
@@ -20,6 +21,7 @@ import {
   planClipSync,
   removeGapsBetweenSelectedClips,
   removeGapsInClips,
+  resolveFfmpegColorFilter,
   resolveImageEffectsFilter,
   resolveImageKenBurnsTransform,
   rewrapTextToMaxLineLength,
@@ -576,6 +578,97 @@ describe("findClipAtMsByPriority", () => {
     const result = findClipAtMsByPriority(tracks, ["VIDEO", "IMAGE"], 500);
     expect(result?.clip.id).toBe("vid");
     expect(result?.trackType).toBe("VIDEO");
+  });
+});
+
+describe("computeVisualRenderSegments", () => {
+  function clip(id: string, startMs: number, endMs: number, zIndex = 0) {
+    return { id, trackId: "x", startMs, endMs, zIndex, payload: { label: id } };
+  }
+
+  it("이미지 트랙 하나만 있으면 그대로 세그먼트가 된다", () => {
+    const tracks = [{ type: "IMAGE" as const, order: 0, visible: true, clips: [clip("a", 0, 1000)] }];
+    const segments = computeVisualRenderSegments(tracks, 1000);
+    expect(segments).toEqual([{ trackType: "IMAGE", clip: clip("a", 0, 1000), segmentStartMs: 0, segmentEndMs: 1000 }]);
+  });
+
+  it("비디오 트랙이 이미지보다 우선순위가 높으면(order가 작으면) 겹치는 구간에서 비디오 세그먼트가 된다", () => {
+    const tracks = [
+      { type: "VIDEO" as const, order: 0, visible: true, clips: [clip("vid", 2000, 5000)] },
+      { type: "IMAGE" as const, order: 1, visible: true, clips: [clip("img", 0, 10000)] },
+    ];
+    const segments = computeVisualRenderSegments(tracks, 10000);
+    expect(segments.map((s) => [s.trackType, s.clip.id, s.segmentStartMs, s.segmentEndMs])).toEqual([
+      ["IMAGE", "img", 0, 2000],
+      ["VIDEO", "vid", 2000, 5000],
+      ["IMAGE", "img", 5000, 10000],
+    ]);
+  });
+
+  it("같은 트랙 안에서는 zIndex가 높은 클립이 겹치는 구간을 가져간다", () => {
+    const tracks = [
+      {
+        type: "IMAGE" as const,
+        order: 0,
+        visible: true,
+        clips: [clip("old", 0, 1000, 0), clip("new", 400, 700, 1)],
+      },
+    ];
+    const segments = computeVisualRenderSegments(tracks, 1000);
+    expect(segments.map((s) => [s.clip.id, s.segmentStartMs, s.segmentEndMs])).toEqual([
+      ["old", 0, 400],
+      ["new", 400, 700],
+      ["old", 700, 1000],
+    ]);
+  });
+
+  it("맨 앞의 빈 구간은 뒤이어 처음 등장하는 클립으로 당겨 채운다", () => {
+    const tracks = [{ type: "IMAGE" as const, order: 0, visible: true, clips: [clip("a", 500, 1000)] }];
+    const segments = computeVisualRenderSegments(tracks, 1000);
+    expect(segments).toEqual([{ trackType: "IMAGE", clip: clip("a", 500, 1000), segmentStartMs: 0, segmentEndMs: 1000 }]);
+  });
+
+  it("중간·끝의 빈 구간은 직전 클립을 이어 채운다", () => {
+    const tracks = [{ type: "IMAGE" as const, order: 0, visible: true, clips: [clip("a", 0, 400)] }];
+    const segments = computeVisualRenderSegments(tracks, 1000);
+    expect(segments).toEqual([{ trackType: "IMAGE", clip: clip("a", 0, 400), segmentStartMs: 0, segmentEndMs: 1000 }]);
+  });
+
+  it("VIDEO/IMAGE 클립이 하나도 없으면 빈 배열을 반환한다", () => {
+    expect(computeVisualRenderSegments([], 1000)).toEqual([]);
+  });
+
+  it("숨긴(visible=false) 트랙은 우선순위 경쟁에서 제외된다", () => {
+    const tracks = [
+      { type: "VIDEO" as const, order: 0, visible: false, clips: [clip("vid", 0, 1000)] },
+      { type: "IMAGE" as const, order: 1, visible: true, clips: [clip("img", 0, 1000)] },
+    ];
+    const segments = computeVisualRenderSegments(tracks, 1000);
+    expect(segments).toEqual([{ trackType: "IMAGE", clip: clip("img", 0, 1000), segmentStartMs: 0, segmentEndMs: 1000 }]);
+  });
+});
+
+describe("resolveFfmpegColorFilter", () => {
+  it("모든 슬라이더가 기본값이면 빈 문자열을 반환한다", () => {
+    expect(resolveFfmpegColorFilter(undefined)).toBe("");
+    expect(resolveFfmpegColorFilter({ brightness: 0, contrast: 0, saturation: 0, temperature: 0 })).toBe("");
+  });
+
+  it("밝기/대비/채도 슬라이더를 eq 필터로 변환한다", () => {
+    const filterStr = resolveFfmpegColorFilter({ brightness: 0.4, contrast: 0.2, saturation: -0.5 });
+    expect(filterStr).toContain("eq=brightness=0.200:contrast=1.100:saturation=0.650");
+  });
+
+  it("색온도가 0이 아니면 colortemperature 필터가 추가된다", () => {
+    const warm = resolveFfmpegColorFilter({ temperature: 1 });
+    expect(warm).toContain("colortemperature=temperature=3500");
+    const cool = resolveFfmpegColorFilter({ temperature: -1 });
+    expect(cool).toContain("colortemperature=temperature=9500");
+  });
+
+  it("채도가 크게 내려가도 0 미만으로 떨어지지 않는다", () => {
+    const filterStr = resolveFfmpegColorFilter({ saturation: -2 });
+    expect(filterStr).toContain("saturation=0.000");
   });
 });
 

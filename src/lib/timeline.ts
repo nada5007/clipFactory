@@ -180,6 +180,29 @@ export function resolveImageEffectsFilter(effects: Partial<VideoClipEffects> | u
   return parts.filter(Boolean).join(" ");
 }
 
+// 밝기/대비/채도/색온도 슬라이더를 실제 ffmpeg 렌더링용 필터 문자열로 변환한다. 색보정 "프리셋"
+// (colorPreset)은 아직 렌더링에 연결하지 않았다 — 프리셋마다 별도 ffmpeg 필터 조합 튜닝이 필요한
+// 큰 작업이라 이번 라운드 범위 밖으로 남겼다(§1.3 disclosure). 슬라이더만 미리보기(CSS filter)와
+// 동일한 -1~1 입력을 받아 eq/colortemperature 필터의 유효 범위로 매핑한다 — ffmpeg 결과와 브라우저
+// CSS filter 결과가 픽셀 단위로 정확히 일치하지는 않는 근사치다.
+export function resolveFfmpegColorFilter(effects: Partial<VideoClipEffects> | undefined): string {
+  const e = { ...DEFAULT_VIDEO_EFFECTS, ...effects };
+  if (e.brightness === 0 && e.contrast === 0 && e.saturation === 0 && e.temperature === 0) return "";
+
+  const parts: string[] = [];
+  const brightness = (e.brightness * 0.5).toFixed(3); // eq brightness: -1~1, 가산형
+  const contrast = Math.max(0, 1 + e.contrast * 0.5).toFixed(3); // eq contrast: 1이 기본
+  const saturation = Math.max(0, 1 + e.saturation * 0.7).toFixed(3); // eq saturation: 1이 기본
+  parts.push(`eq=brightness=${brightness}:contrast=${contrast}:saturation=${saturation}`);
+  if (e.temperature !== 0) {
+    // colortemperature 필터는 절대 켈빈 값(기본 6500=중립)을 받는다 — 슬라이더 -1(차갑게)~1(따뜻하게)을
+    // 3500~9500K 범위로 근사 매핑한다.
+    const kelvin = Math.round(6500 - e.temperature * 3000);
+    parts.push(`colortemperature=temperature=${kelvin}`);
+  }
+  return parts.join(",");
+}
+
 const PAN_SPEED_BLEED_PCT: Record<PanSpeed, number> = { slow: 6, normal: 10, fast: 16 };
 
 // panDirection이 "random"이면 클립 ID를 해시해 클립마다 고정된(재생할 때마다 바뀌지 않는) 방향을 고른다.
@@ -467,6 +490,75 @@ export function findClipAtMsByPriority(
     if (clip) return { clip, trackType: track.type };
   }
   return null;
+}
+
+export type VisualRenderSegment = {
+  trackType: "VIDEO" | "IMAGE";
+  clip: PersistedTimelineClip;
+  segmentStartMs: number;
+  segmentEndMs: number;
+};
+
+// 렌더링용: 미리보기와 동일한 findClipAtMsByPriority 경쟁 로직을 타임라인 전체 구간에 적용해,
+// "이 구간엔 이 클립(VIDEO 또는 IMAGE)이 표출된다"는 연속 세그먼트 목록으로 환산한다. 미리보기 화면에서
+// 보이는 합성 결과가 최종 렌더링에도 그대로 반영되도록 하는 것이 목적이다(§1.3 "렌더링 파이프라인 확장").
+// 클립 경계(시작/끝 시각)마다 승자가 바뀔 수 있으므로 그 지점들을 구간 경계로 삼고, 각 구간 중간 지점에서
+// 승자를 판정한다. 아무도 승자가 없는 구간(빈 틈)은 직전 세그먼트를 이어 채우고, 맨 앞의 빈 구간은
+// 뒤이어 처음 등장하는 클립을 앞으로 당겨 채운다(computeImageRenderSegments와 동일한 관례).
+export function computeVisualRenderSegments(
+  tracks: { type: TimelineTrackType; order: number; visible: boolean; clips: PersistedTimelineClip[] }[],
+  timelineDurationMs: number,
+): VisualRenderSegment[] {
+  const relevant = tracks.filter((t) => t.type === "VIDEO" || t.type === "IMAGE");
+
+  const breakpoints = new Set<number>([0, timelineDurationMs]);
+  for (const track of relevant) {
+    for (const clip of track.clips) {
+      breakpoints.add(Math.max(0, Math.min(clip.startMs, timelineDurationMs)));
+      breakpoints.add(Math.max(0, Math.min(clip.endMs, timelineDurationMs)));
+    }
+  }
+  const points = Array.from(breakpoints).sort((a, b) => a - b);
+
+  type Winner = { trackType: "VIDEO" | "IMAGE"; clip: PersistedTimelineClip } | null;
+  const raw: { winner: Winner; startMs: number; endMs: number }[] = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    const startMs = points[i];
+    const endMs = points[i + 1];
+    if (endMs <= startMs) continue;
+    const found = findClipAtMsByPriority(relevant, ["VIDEO", "IMAGE"], (startMs + endMs) / 2);
+    raw.push({ winner: found ? { trackType: found.trackType as "VIDEO" | "IMAGE", clip: found.clip } : null, startMs, endMs });
+  }
+
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i].winner) continue;
+    for (let j = i - 1; j >= 0; j--) {
+      if (raw[j].winner) {
+        raw[i].winner = raw[j].winner;
+        break;
+      }
+    }
+    if (!raw[i].winner) {
+      for (let j = i + 1; j < raw.length; j++) {
+        if (raw[j].winner) {
+          raw[i].winner = raw[j].winner;
+          break;
+        }
+      }
+    }
+  }
+
+  const merged: VisualRenderSegment[] = [];
+  for (const seg of raw) {
+    if (!seg.winner) continue; // 타임라인 전체에 VIDEO/IMAGE 클립이 하나도 없는 경우
+    const last = merged[merged.length - 1];
+    if (last && last.clip.id === seg.winner.clip.id) {
+      last.segmentEndMs = seg.endMs;
+    } else {
+      merged.push({ trackType: seg.winner.trackType, clip: seg.winner.clip, segmentStartMs: seg.startMs, segmentEndMs: seg.endMs });
+    }
+  }
+  return merged;
 }
 
 export function computeTimelineStats(timeline: {

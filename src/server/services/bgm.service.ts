@@ -102,6 +102,11 @@ export function readBgmTrackFile(track: { filePath: string }) {
   return fs.readFile(resolveProjectFilePath(BGM_LIBRARY_KEY, track.filePath));
 }
 
+// 렌더링 파이프라인(video.service.ts)에서 BGM 트랙 원본 파일을 ffmpeg 입력으로 쓰기 위한 절대경로.
+export function resolveBgmTrackPath(track: { filePath: string }): string {
+  return resolveProjectFilePath(BGM_LIBRARY_KEY, track.filePath);
+}
+
 export type BgmSettings = {
   trackId: string;
   volumeDb: number;

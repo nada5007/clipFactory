@@ -1,10 +1,14 @@
 import { generateAss } from "@/lib/ass";
 import {
-  buildImageSlideshow,
+  buildImageSegmentClip,
+  buildVideoSegmentClip,
   burnSubtitles,
   concatAudioFiles,
+  concatVideoSegments,
   generateSilence,
+  mixAudioTracks,
   muxVideoAudio,
+  prepareBgmAudio,
   trimOrPadAudioToDuration,
 } from "@/lib/ffmpeg";
 import { prisma } from "@/lib/prisma";
@@ -12,11 +16,15 @@ import { generateSrt } from "@/lib/srt";
 import { ensureProjectDir, resolveProjectFilePath, writeProjectFile } from "@/lib/storage";
 import {
   computeAudioRenderPlan,
-  computeImageRenderSegments,
+  computeVisualRenderSegments,
+  resolveFfmpegColorFilter,
   resolveSubtitleStyle,
   type PersistedClipPayload,
+  type PersistedTimelineClip,
+  type TimelineTrackType,
 } from "@/lib/timeline";
 import { resolveVideoResolution } from "@/lib/video";
+import { getBgmTrack, getEffectiveBgmSettings, resolveBgmTrackPath } from "@/server/services/bgm.service";
 import type { JobProgressReporter } from "@/server/services/job.service";
 import { getOrSyncTimeline } from "@/server/services/timeline.service";
 
@@ -30,11 +38,9 @@ function clipPayload(clip: { payload: unknown }): PersistedClipPayload {
   return (clip.payload as PersistedClipPayload | null) ?? { label: "" };
 }
 
-// PROJECT_SPEC.md §1.3 "타임라인 편집기 — 렌더링 파이프라인을 Timeline 기준으로 재구축": 기존에는
-// project.audioSegments/images 원본 테이블만 읽어 렌더링해서, 타임라인 편집기에서의 드래그/트림/분할/
-// 텍스트·스타일 수정이 최종 영상에 전혀 반영되지 않았다. 이제 TimelineClip(TTS/IMAGE/SUBTITLE)을
-// 기준으로 렌더링해 편집 결과가 그대로 반영되도록 한다. 트림/삭제로 생긴 빈 구간은 무음(오디오)/
-// 이전 이미지 연장(이미지)으로 채운다(computeAudioRenderPlan/computeImageRenderSegments).
+// PROJECT_SPEC.md §1.3 "렌더링 파이프라인 확장": VIDEO/IMAGE 트랙이 여러 개여도 미리보기와 동일한
+// 우선순위·겹침(computeVisualRenderSegments)으로 합성하고, BGM을 실제로 믹싱하며, 밝기/대비/채도/
+// 색온도 슬라이더를 ffmpeg 필터로 반영한다. 색보정 프리셋·켄번즈·마스크·전환효과는 아직 범위 밖(disclosure).
 export async function renderVideo(projectId: string, onProgress?: JobProgressReporter) {
   const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } });
   const timeline = await getOrSyncTimeline(projectId);
@@ -43,18 +49,28 @@ export async function renderVideo(projectId: string, onProgress?: JobProgressRep
   }
 
   const ttsClips = timeline.tracks.find((t) => t.type === "TTS")?.clips ?? [];
-  const imageClips = timeline.tracks.find((t) => t.type === "IMAGE")?.clips ?? [];
   const subtitleClips = timeline.tracks.find((t) => t.type === "SUBTITLE")?.clips ?? [];
 
   if (ttsClips.length === 0) {
     throw new Error("TTS 음성이 없어 영상을 생성할 수 없습니다. 먼저 TTS를 생성해주세요.");
   }
-  if (imageClips.length === 0) {
-    throw new Error("이미지가 없어 영상을 생성할 수 없습니다. 먼저 이미지를 생성해주세요.");
-  }
 
   const { width, height } = resolveVideoResolution(project.videoFormat);
   const totalDurationMs = timeline.durationMs;
+
+  // Prisma가 payload를 JsonValue로 돌려주는데, 실제로는 항상 서비스 계층에서 PersistedClipPayload
+  // 형태로 저장한 값이다(clipPayload 헬퍼와 동일한 전제) — computeVisualRenderSegments가 기대하는
+  // 형태로 안전하게 취급한다.
+  const visualTracks = timeline.tracks as unknown as {
+    type: TimelineTrackType;
+    order: number;
+    visible: boolean;
+    clips: PersistedTimelineClip[];
+  }[];
+  const visualSegments = computeVisualRenderSegments(visualTracks, totalDurationMs);
+  if (visualSegments.length === 0) {
+    throw new Error("영상에 사용할 이미지나 비디오가 없어 영상을 생성할 수 없습니다. 먼저 이미지를 생성하거나 비디오를 추가해주세요.");
+  }
 
   try {
     await ensureProjectDir(projectId, "tmp");
@@ -99,42 +115,89 @@ export async function renderVideo(projectId: string, onProgress?: JobProgressRep
 
     const audioFullPath = resolveProjectFilePath(projectId, "audio_full.mp3");
     await concatAudioFiles(audioPartPaths, resolveProjectFilePath(projectId, "tmp/audio_concat.txt"), audioFullPath);
-    await onProgress?.(30, "이미지 슬라이드쇼 생성 중");
+    await onProgress?.(20, "영상/이미지 자료 준비 중");
 
-    const imageAssetIds = Array.from(new Set(imageClips.map((c) => clipPayload(c).sourceId).filter((v): v is string => Boolean(v))));
-    const imageAssets = await prisma.imageAsset.findMany({ where: { id: { in: imageAssetIds } } });
-    const imageAssetById = new Map(imageAssets.map((i) => [i.id, i]));
+    // visualSegments가 참조하는 클립만 골라 자산을 조회한다(실제로 화면에 쓰이지 않는, 우선순위에서
+    // 밀린 클립의 자산까지 전부 조회/검증할 필요는 없다).
+    const imageSourceIds = new Set<string>();
+    const uploadedMediaIds = new Set<string>();
+    for (const seg of visualSegments) {
+      const payload = clipPayload(seg.clip);
+      if (payload.mediaId) uploadedMediaIds.add(payload.mediaId);
+      else if (seg.trackType === "IMAGE" && payload.sourceId) imageSourceIds.add(payload.sourceId);
+    }
+    const imageAssets = await prisma.imageAsset.findMany({ where: { id: { in: Array.from(imageSourceIds) } } });
+    const imageAssetById = new Map(imageAssets.map((a) => [a.id, a]));
+    const uploadedMedia = await prisma.uploadedMedia.findMany({ where: { id: { in: Array.from(uploadedMediaIds) } } });
+    const uploadedMediaById = new Map(uploadedMedia.map((m) => [m.id, m]));
 
-    const blankImages = imageAssets.filter((i) => !i.filePath);
-    if (blankImages.length > 0) {
-      throw new Error(
-        `아직 채워지지 않은 빈 이미지 카드가 ${blankImages.length}개 있습니다. 업로드 또는 재생성으로 먼저 채워주세요.`,
-      );
+    const visualPartPaths: string[] = [];
+    for (let i = 0; i < visualSegments.length; i++) {
+      const seg = visualSegments[i];
+      const payload = clipPayload(seg.clip);
+      const durationSec = (seg.segmentEndMs - seg.segmentStartMs) / 1000;
+      if (durationSec <= 0) continue;
+
+      const colorFilter = resolveFfmpegColorFilter(payload.effects) || undefined;
+      const outPath = resolveProjectFilePath(projectId, `tmp/visual_${i}.mp4`);
+
+      if (seg.trackType === "VIDEO") {
+        const media = payload.mediaId ? uploadedMediaById.get(payload.mediaId) : undefined;
+        if (!media) {
+          throw new Error(`비디오 클립이 가리키는 파일을 찾을 수 없습니다(clipId: ${seg.clip.id}). 동기화 후 다시 시도해주세요.`);
+        }
+        const offsetSec = Math.max(0, ((payload.sourceOffsetMs ?? 0) + (seg.segmentStartMs - seg.clip.startMs)) / 1000);
+        await buildVideoSegmentClip(
+          resolveProjectFilePath(projectId, media.filePath),
+          offsetSec,
+          durationSec,
+          width,
+          height,
+          outPath,
+          colorFilter,
+        );
+      } else {
+        const imagePath = payload.mediaId
+          ? uploadedMediaById.get(payload.mediaId)?.filePath
+          : payload.sourceId
+            ? imageAssetById.get(payload.sourceId)?.filePath
+            : undefined;
+        if (!imagePath) {
+          throw new Error(`이미지 클립이 가리키는 이미지를 찾을 수 없습니다(clipId: ${seg.clip.id}). 동기화 후 다시 시도해주세요.`);
+        }
+        await buildImageSegmentClip(resolveProjectFilePath(projectId, imagePath), durationSec, width, height, outPath, colorFilter);
+      }
+      visualPartPaths.push(outPath);
     }
 
-    const imageClipInputs = imageClips.map((c) => {
-      const payload = clipPayload(c);
-      const asset = payload.sourceId ? imageAssetById.get(payload.sourceId) : undefined;
-      if (!asset?.filePath) {
-        throw new Error(`이미지 클립이 가리키는 이미지를 찾을 수 없습니다(clipId: ${c.id}). 동기화 후 다시 시도해주세요.`);
-      }
-      return { startMs: c.startMs, endMs: c.endMs, imagePath: resolveProjectFilePath(projectId, asset.filePath) };
-    });
-
-    const imageSegments = computeImageRenderSegments(imageClipInputs, totalDurationMs);
     const videoOnlyPath = resolveProjectFilePath(projectId, "video_only.mp4");
-    await buildImageSlideshow(
-      imageSegments.map((s) => s.imagePath),
-      imageSegments.map((s) => s.durationSec),
-      width,
-      height,
-      resolveProjectFilePath(projectId, "tmp/images_concat.txt"),
-      videoOnlyPath,
-    );
+    await concatVideoSegments(visualPartPaths, resolveProjectFilePath(projectId, "tmp/visual_concat.txt"), videoOnlyPath);
+    await onProgress?.(45, "BGM 믹싱 중");
+
+    // 프로젝트 유효 BGM 설정(프로젝트 우선, 없으면 채널 기본값)이 있으면 TTS 음성에 섞는다 — 미리보기
+    // 재생(playBgmFrom)이 참조하는 것과 동일한 프로젝트 단위 설정을 그대로 쓴다.
+    let finalAudioPath = audioFullPath;
+    const effectiveBgm = await getEffectiveBgmSettings(projectId);
+    if (effectiveBgm.settings?.trackId) {
+      const bgmTrack = await getBgmTrack(effectiveBgm.settings.trackId);
+      if (bgmTrack) {
+        const bgmPreparedPath = resolveProjectFilePath(projectId, "tmp/bgm_prepared.mp3");
+        const volumeLinear = Math.max(0, 10 ** (effectiveBgm.settings.volumeDb / 20));
+        await prepareBgmAudio(
+          resolveBgmTrackPath(bgmTrack),
+          { volumeLinear, playbackSpeed: effectiveBgm.settings.playbackSpeed, loop: effectiveBgm.settings.loop },
+          totalDurationMs / 1000,
+          bgmPreparedPath,
+        );
+        const mixedPath = resolveProjectFilePath(projectId, "audio_mixed.mp3");
+        await mixAudioTracks(audioFullPath, bgmPreparedPath, mixedPath);
+        finalAudioPath = mixedPath;
+      }
+    }
     await onProgress?.(70, "영상과 음성 합성 중");
 
     const mutedVideoPath = resolveProjectFilePath(projectId, "video_muted.mp4");
-    await muxVideoAudio(videoOnlyPath, audioFullPath, mutedVideoPath);
+    await muxVideoAudio(videoOnlyPath, finalAudioPath, mutedVideoPath);
     await onProgress?.(90, "자막 삽입 중");
 
     const srtRelativePath = "subtitles.srt";

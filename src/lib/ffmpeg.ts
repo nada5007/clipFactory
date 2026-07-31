@@ -52,26 +52,87 @@ export async function concatAudioFiles(
   ]);
 }
 
-export async function buildImageSlideshow(
-  imagePaths: string[],
-  durationsSec: number[],
+// VIDEO/IMAGE 멀티트랙 우선순위 합성(computeVisualRenderSegments)의 세그먼트 하나를 목표 해상도로
+// 정규화한 정지 이미지 클립으로 만든다. extraFilters(색보정 등)는 scale/pad 뒤, format 앞에 끼워넣는다.
+export async function buildImageSegmentClip(
+  imagePath: string,
+  durationSec: number,
   width: number,
   height: number,
+  outputPath: string,
+  extraFilters?: string,
+): Promise<void> {
+  const vf = [
+    `scale=${width}:${height}:force_original_aspect_ratio=decrease`,
+    `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
+    ...(extraFilters ? [extraFilters] : []),
+    "format=yuv420p",
+  ].join(",");
+
+  await execFileAsync(FFMPEG_BIN, [
+    "-y",
+    "-loop",
+    "1",
+    "-i",
+    imagePath,
+    "-t",
+    String(durationSec),
+    "-vf",
+    vf,
+    "-r",
+    "30",
+    "-pix_fmt",
+    "yuv420p",
+    outputPath,
+  ]);
+}
+
+// 위와 동일한 세그먼트 정규화를, VIDEO 클립은 원본에서 [offsetSec, offsetSec+durationSec] 구간만
+// 트림해서 만든다. 오디오는 버린다(-an) — 최종 음성은 TTS/BGM 트랙에서 별도로 합성한다.
+export async function buildVideoSegmentClip(
+  videoPath: string,
+  offsetSec: number,
+  durationSec: number,
+  width: number,
+  height: number,
+  outputPath: string,
+  extraFilters?: string,
+): Promise<void> {
+  const vf = [
+    `scale=${width}:${height}:force_original_aspect_ratio=decrease`,
+    `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
+    ...(extraFilters ? [extraFilters] : []),
+    "format=yuv420p",
+  ].join(",");
+
+  await execFileAsync(FFMPEG_BIN, [
+    "-y",
+    "-ss",
+    String(offsetSec),
+    "-i",
+    videoPath,
+    "-t",
+    String(durationSec),
+    "-vf",
+    vf,
+    "-r",
+    "30",
+    "-an",
+    "-pix_fmt",
+    "yuv420p",
+    outputPath,
+  ]);
+}
+
+// buildImageSegmentClip/buildVideoSegmentClip으로 정규화(동일 해상도/프레임레이트/픽셀포맷)해 만든
+// 세그먼트들을 순서대로 이어붙인다. 모두 같은 설정으로 인코딩됐으므로 -c copy로 빠르게 합칠 수 있다.
+export async function concatVideoSegments(
+  segmentPaths: string[],
   listFilePath: string,
   outputPath: string,
 ): Promise<void> {
-  const lines: string[] = [];
-  imagePaths.forEach((imagePath, i) => {
-    lines.push(`file ${quoteConcatPath(imagePath)}`);
-    lines.push(`duration ${durationsSec[i]}`);
-  });
-  // concat demuxer는 마지막 항목의 duration을 무시하므로 마지막 파일을 한 번 더 반복해야 한다.
-  lines.push(`file ${quoteConcatPath(imagePaths[imagePaths.length - 1])}`);
-  await fs.writeFile(listFilePath, lines.join("\n"), "utf-8");
-
-  // concat demuxer가 이 "반복된 마지막 파일" 경계 항목을 자체 duration을 가진 세그먼트로 취급해
-  // 실제 합보다 한 구간 더 길게(직전 항목 길이만큼) 뽑아내는 경우가 있어, -t로 정확한 총 길이를 강제한다.
-  const totalDurationSec = durationsSec.reduce((sum, d) => sum + d, 0);
+  const list = segmentPaths.map((p) => `file ${quoteConcatPath(p)}`).join("\n");
+  await fs.writeFile(listFilePath, list, "utf-8");
 
   await execFileAsync(FFMPEG_BIN, [
     "-y",
@@ -81,14 +142,41 @@ export async function buildImageSlideshow(
     "0",
     "-i",
     listFilePath,
-    "-vf",
-    `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,format=yuv420p`,
-    "-r",
-    "30",
-    "-t",
-    String(totalDurationSec),
-    "-pix_fmt",
-    "yuv420p",
+    "-c",
+    "copy",
+    outputPath,
+  ]);
+}
+
+// BGM 트랙 원본을 볼륨/재생속도(atempo)를 적용하고 타임라인 길이에 맞춰(루프 또는 무음 패딩) 가공한다.
+export async function prepareBgmAudio(
+  bgmPath: string,
+  options: { volumeLinear: number; playbackSpeed: number; loop: boolean },
+  totalDurationSec: number,
+  outputPath: string,
+): Promise<void> {
+  const af = [`volume=${options.volumeLinear}`, `atempo=${options.playbackSpeed}`, ...(options.loop ? [] : ["apad"])].join(
+    ",",
+  );
+  const args = ["-y"];
+  if (options.loop) args.push("-stream_loop", "-1");
+  args.push("-i", bgmPath, "-af", af, "-t", String(totalDurationSec), "-c:a", "libmp3lame", outputPath);
+  await execFileAsync(FFMPEG_BIN, args);
+}
+
+// TTS 음성 트랙과 가공된 BGM을 하나의 오디오로 섞는다. normalize=0으로 amix가 각 입력 볼륨을
+// 자동으로 낮추지 않게 해, 이미 확정된 TTS 음량이 BGM 믹싱 여부와 무관하게 유지되도록 한다.
+export async function mixAudioTracks(voicePath: string, bgmPath: string, outputPath: string): Promise<void> {
+  await execFileAsync(FFMPEG_BIN, [
+    "-y",
+    "-i",
+    voicePath,
+    "-i",
+    bgmPath,
+    "-filter_complex",
+    "[0:a][1:a]amix=inputs=2:duration=first:normalize=0",
+    "-c:a",
+    "libmp3lame",
     outputPath,
   ]);
 }

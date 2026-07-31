@@ -4,11 +4,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  buildImageSlideshow,
+  buildImageSegmentClip,
+  buildVideoSegmentClip,
   burnSubtitles,
   concatAudioFiles,
+  concatVideoSegments,
   generateSilence,
+  mixAudioTracks,
   muxVideoAudio,
+  prepareBgmAudio,
   trimOrPadAudioToDuration,
 } from "@/lib/ffmpeg";
 import { prisma } from "@/lib/prisma";
@@ -16,7 +20,11 @@ import { renderVideo } from "@/server/services/video.service";
 
 vi.mock("@/lib/ffmpeg", () => ({
   concatAudioFiles: vi.fn().mockResolvedValue(undefined),
-  buildImageSlideshow: vi.fn().mockResolvedValue(undefined),
+  buildImageSegmentClip: vi.fn().mockResolvedValue(undefined),
+  buildVideoSegmentClip: vi.fn().mockResolvedValue(undefined),
+  concatVideoSegments: vi.fn().mockResolvedValue(undefined),
+  prepareBgmAudio: vi.fn().mockResolvedValue(undefined),
+  mixAudioTracks: vi.fn().mockResolvedValue(undefined),
   muxVideoAudio: vi.fn().mockResolvedValue(undefined),
   generateSilence: vi.fn().mockResolvedValue(undefined),
   trimOrPadAudioToDuration: vi.fn().mockResolvedValue(undefined),
@@ -79,6 +87,7 @@ async function createProjectWithAssets(options: { audio: boolean; images: boolea
 async function cleanup(projectId: string, channelId: string) {
   await prisma.timeline.deleteMany({ where: { projectId } });
   await prisma.videoAsset.deleteMany({ where: { projectId } });
+  await prisma.uploadedMedia.deleteMany({ where: { projectId } });
   await prisma.imageAsset.deleteMany({ where: { projectId } });
   await prisma.audioSegment.deleteMany({ where: { projectId } });
   await prisma.project.delete({ where: { id: projectId } });
@@ -89,7 +98,11 @@ async function cleanup(projectId: string, channelId: string) {
 describe("renderVideo", () => {
   afterEach(() => {
     vi.mocked(concatAudioFiles).mockClear();
-    vi.mocked(buildImageSlideshow).mockClear();
+    vi.mocked(buildImageSegmentClip).mockClear();
+    vi.mocked(buildVideoSegmentClip).mockClear();
+    vi.mocked(concatVideoSegments).mockClear();
+    vi.mocked(prepareBgmAudio).mockClear();
+    vi.mocked(mixAudioTracks).mockClear();
     vi.mocked(muxVideoAudio).mockClear();
     vi.mocked(generateSilence).mockClear();
     vi.mocked(trimOrPadAudioToDuration).mockClear();
@@ -111,7 +124,13 @@ describe("renderVideo", () => {
       expect(concatAudioFiles).toHaveBeenCalledTimes(1);
       expect(generateSilence).not.toHaveBeenCalled();
       expect(trimOrPadAudioToDuration).not.toHaveBeenCalled();
-      expect(buildImageSlideshow).toHaveBeenCalledTimes(1);
+      // 이미지 하나뿐이라 세그먼트 1개(정지 이미지 클립)만 만들어져 이어붙여진다.
+      expect(buildImageSegmentClip).toHaveBeenCalledTimes(1);
+      expect(buildVideoSegmentClip).not.toHaveBeenCalled();
+      expect(concatVideoSegments).toHaveBeenCalledTimes(1);
+      // BGM 설정이 없는 프로젝트라 믹싱은 건너뛴다.
+      expect(prepareBgmAudio).not.toHaveBeenCalled();
+      expect(mixAudioTracks).not.toHaveBeenCalled();
       expect(muxVideoAudio).toHaveBeenCalledTimes(1);
       expect(burnSubtitles).toHaveBeenCalledTimes(1);
 
@@ -137,7 +156,8 @@ describe("renderVideo", () => {
       await renderVideo(project.id, onProgress);
 
       expect(onProgress).toHaveBeenCalledWith(5, expect.any(String));
-      expect(onProgress).toHaveBeenCalledWith(30, expect.any(String));
+      expect(onProgress).toHaveBeenCalledWith(20, expect.any(String));
+      expect(onProgress).toHaveBeenCalledWith(45, expect.any(String));
       expect(onProgress).toHaveBeenCalledWith(70, expect.any(String));
       expect(onProgress).toHaveBeenCalledWith(90, expect.any(String));
     } finally {
@@ -154,10 +174,10 @@ describe("renderVideo", () => {
     }
   });
 
-  it("이미지가 없으면 에러를 던진다", async () => {
+  it("이미지도 비디오도 없으면 에러를 던진다", async () => {
     const { channel, project } = await createProjectWithAssets({ audio: true, images: false });
     try {
-      await expect(renderVideo(project.id)).rejects.toThrow("이미지가 없어");
+      await expect(renderVideo(project.id)).rejects.toThrow("이미지나 비디오가 없어");
     } finally {
       await cleanup(project.id, channel.id);
     }
@@ -185,7 +205,7 @@ describe("renderVideo", () => {
       await renderVideo(project.id).catch(() => undefined); // Timeline 생성 목적, 실패해도 무방
       vi.mocked(concatAudioFiles).mockClear();
       vi.mocked(muxVideoAudio).mockClear();
-      vi.mocked(buildImageSlideshow).mockClear();
+      vi.mocked(buildImageSegmentClip).mockClear();
       vi.mocked(burnSubtitles).mockClear();
 
       const timeline = await prisma.timeline.findUniqueOrThrow({ where: { projectId: project.id } });
@@ -204,6 +224,78 @@ describe("renderVideo", () => {
       expect(generateSilence).toHaveBeenCalledTimes(1);
       expect(generateSilence).toHaveBeenCalledWith(0.5, expect.any(String));
     } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("VIDEO 트랙이 IMAGE보다 우선순위가 높으면 겹치는 구간에서 비디오 세그먼트를 만든다", async () => {
+    const { channel, project } = await createProjectWithAssets({ audio: true, images: true });
+    try {
+      await renderVideo(project.id).catch(() => undefined); // Timeline 생성 목적
+
+      const timeline = await prisma.timeline.findUniqueOrThrow({ where: { projectId: project.id } });
+      const videoTrack = await prisma.timelineTrack.findFirstOrThrow({
+        where: { timelineId: timeline.id, type: "VIDEO" },
+      });
+      const media = await prisma.uploadedMedia.create({
+        data: { projectId: project.id, kind: "video", filePath: "uploads/clip.mp4", durationMs: 1500 },
+      });
+      await prisma.timelineClip.create({
+        data: {
+          trackId: videoTrack.id,
+          startMs: 500,
+          endMs: 1500,
+          zIndex: 0,
+          payload: { label: "clip.mp4", mediaId: media.id, mediaKind: "video" },
+        },
+      });
+
+      vi.mocked(buildImageSegmentClip).mockClear();
+      vi.mocked(buildVideoSegmentClip).mockClear();
+
+      await renderVideo(project.id);
+
+      // 이미지(0~2500) 전체를 비디오(500~1500)가 order 우선순위로 가운데를 덮어, 앞/뒤 이미지
+      // 세그먼트 2개 + 가운데 비디오 세그먼트 1개, 총 3개 세그먼트가 만들어진다.
+      expect(buildImageSegmentClip).toHaveBeenCalledTimes(2);
+      expect(buildVideoSegmentClip).toHaveBeenCalledTimes(1);
+      expect(buildVideoSegmentClip).toHaveBeenCalledWith(
+        expect.stringContaining("clip.mp4"),
+        0,
+        1,
+        1080,
+        1920,
+        expect.any(String),
+        undefined,
+      );
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("프로젝트에 유효 BGM 설정이 있으면 BGM을 준비해 TTS 음성과 믹싱한다", async () => {
+    const { channel, project } = await createProjectWithAssets({ audio: true, images: true });
+    try {
+      const bgmTrack = await prisma.bgmTrack.create({
+        data: { title: "테스트 BGM", category: "calm", filePath: "bgm_1.mp3", source: "upload" },
+      });
+      await prisma.project.update({
+        where: { id: project.id },
+        data: { settings: { bgm: { trackId: bgmTrack.id, volumeDb: -6, playbackSpeed: 1, loop: true } } },
+      });
+
+      await renderVideo(project.id);
+
+      expect(prepareBgmAudio).toHaveBeenCalledTimes(1);
+      expect(prepareBgmAudio).toHaveBeenCalledWith(
+        expect.stringContaining("bgm_1.mp3"),
+        { volumeLinear: expect.closeTo(0.501, 2), playbackSpeed: 1, loop: true },
+        2.5,
+        expect.any(String),
+      );
+      expect(mixAudioTracks).toHaveBeenCalledTimes(1);
+    } finally {
+      await prisma.bgmTrack.deleteMany({ where: { title: "테스트 BGM" } });
       await cleanup(project.id, channel.id);
     }
   });
