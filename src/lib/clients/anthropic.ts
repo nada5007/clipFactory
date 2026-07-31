@@ -219,7 +219,12 @@ const sourceMatchSchema = z.object({
 
 export type SourceMatchResult = z.infer<typeof sourceMatchSchema>["matches"][number];
 
-export async function scoreSourceMatches(
+// 후보가 많을 때 한 번의 structured-output 호출로 처리하면, adaptive thinking 토큰까지 max_tokens를
+// 잠식해 JSON 출력이 중간에 잘리고(.parse()가 "Unterminated string" 실패) 발굴 전체가 죽는다.
+// 이를 막기 위해 채점·번역 모두 이 크기로 배치를 나눠 호출한 뒤 인덱스를 재매핑해 병합한다.
+const LLM_BATCH_SIZE = 25;
+
+async function scoreSourceMatchesBatch(
   concept: string,
   candidates: { title: string; description: string; channelTitle: string }[],
 ): Promise<SourceMatchResult[]> {
@@ -255,14 +260,40 @@ export async function scoreSourceMatches(
   return response.parsed_output.matches;
 }
 
+export async function scoreSourceMatches(
+  concept: string,
+  candidates: { title: string; description: string; channelTitle: string }[],
+): Promise<SourceMatchResult[]> {
+  const batches: { start: number; items: typeof candidates }[] = [];
+  for (let i = 0; i < candidates.length; i += LLM_BATCH_SIZE) {
+    batches.push({ start: i, items: candidates.slice(i, i + LLM_BATCH_SIZE) });
+  }
+
+  const batchResults = await Promise.all(
+    batches.map(async ({ start, items }) => {
+      try {
+        const matches = await scoreSourceMatchesBatch(concept, items);
+        // 각 배치는 로컬 인덱스(0~items.length-1)를 반환하므로 전역 인덱스로 되돌린다.
+        // 범위를 벗어난 인덱스는 모델의 착오이므로 버린다.
+        return matches
+          .filter((m) => m.index >= 0 && m.index < items.length)
+          .map((m) => ({ ...m, index: start + m.index }));
+      } catch {
+        // 한 배치가 실패해도 전체 발굴이 죽지 않게 한다 — 해당 배치 영상은 점수 0(정렬 하위)으로 남는다.
+        return [] as SourceMatchResult[];
+      }
+    }),
+  );
+
+  return batchResults.flat();
+}
+
 // UI_SPEC.md §7.1 "소스 발굴" "제목 자동 번역": 해외 영상 제목을 한국어로 일괄 번역한다.
 const translationSchema = z.object({
   translations: z.array(z.object({ index: z.number().int(), translated: z.string() })),
 });
 
-export async function translateTitles(titles: string[]): Promise<string[]> {
-  if (titles.length === 0) return [];
-
+async function translateTitlesBatch(titles: string[]): Promise<Map<number, string>> {
   const client = getClient();
   const response = await client.messages.parse({
     model: MODEL,
@@ -281,7 +312,37 @@ export async function translateTitles(titles: string[]): Promise<string[]> {
     throw new Error("제목 번역 결과를 파싱하지 못했습니다.");
   }
 
-  const byIndex = new Map(response.parsed_output.translations.map((t) => [t.index, t.translated]));
+  return new Map(response.parsed_output.translations.map((t) => [t.index, t.translated]));
+}
+
+export async function translateTitles(titles: string[]): Promise<string[]> {
+  if (titles.length === 0) return [];
+
+  const batches: { start: number; items: string[] }[] = [];
+  for (let i = 0; i < titles.length; i += LLM_BATCH_SIZE) {
+    batches.push({ start: i, items: titles.slice(i, i + LLM_BATCH_SIZE) });
+  }
+
+  const batchMaps = await Promise.all(
+    batches.map(async ({ start, items }) => {
+      try {
+        const local = await translateTitlesBatch(items);
+        const global = new Map<number, string>();
+        local.forEach((translated, localIndex) => {
+          if (localIndex >= 0 && localIndex < items.length) global.set(start + localIndex, translated);
+        });
+        return global;
+      } catch {
+        // 한 배치가 실패해도 전체가 죽지 않게 한다 — 해당 배치 제목은 아래에서 원문으로 폴백된다.
+        return new Map<number, string>();
+      }
+    }),
+  );
+
+  const byIndex = new Map<number, string>();
+  for (const map of batchMaps) {
+    map.forEach((translated, index) => byIndex.set(index, translated));
+  }
   return titles.map((title, i) => byIndex.get(i) ?? title);
 }
 
