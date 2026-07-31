@@ -445,6 +445,8 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   // 참조 사이트처럼 호흡구간/목표길이 아이콘을 클릭하면 툴바가 확장되어 인라인 입력+확인/취소가 나타난다.
   const [openInlineEditor, setOpenInlineEditor] = useState<"breathing" | "scale" | null>(null);
   const [playheadMs, setPlayheadMs] = useState(0);
+  const playheadMsRef = useRef(0);
+  playheadMsRef.current = playheadMs;
   const [history, setHistory] = useState<ClipSnapshot[]>([]);
   const [future, setFuture] = useState<ClipSnapshot[]>([]);
 
@@ -741,6 +743,15 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     video.currentTime = Math.max(0, localSec);
     video.play().catch(() => {});
   }
+
+  // 재생 도중(togglePlay/seekTo를 거치지 않고) 재생헤드가 자연스럽게 새 비디오 클립 구간으로
+  // 넘어가는 경우 — <video>가 key={clipId}로 새로 마운트되며 첫 프레임에 멈춘 채로 남는다.
+  // 이때는 아무도 play()를 불러주지 않으므로 여기서 명시적으로 이어서 재생을 시작한다.
+  useEffect(() => {
+    if (!isPlaying || !previewVideoClip) return;
+    playPreviewVideoFrom(playheadMsRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying, previewVideoClip?.id]);
 
   function stopPlayback() {
     ttsAudioRef.current?.pause();
