@@ -10,6 +10,7 @@ import {
   clampTrimEnd,
   clampTrimStart,
   computeCoveredClipIds,
+  computeRulerStepSec,
   snapToGrid,
   type PersistedTimeline,
   type PersistedTimelineClip,
@@ -29,6 +30,7 @@ const TRACK_COLORS: Record<TimelineTrackType, string> = {
 
 const BASE_PX_PER_SEC = 20;
 const TRIM_HANDLE_PX = 6;
+const RULER_MINOR_SUBDIVISIONS = 5;
 
 function formatTimecode(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -143,10 +145,15 @@ export function TimelineTracks({
   const durationSec = timeline.durationMs / 1000;
   const totalWidth = Math.max(durationSec * pxPerSec, 400);
 
+  const rulerStepSec = computeRulerStepSec(pxPerSec);
+  const rulerMinorStepSec = rulerStepSec / RULER_MINOR_SUBDIVISIONS;
   const rulerMarks: number[] = [];
-  const rulerStepSec = 30;
+  const rulerMinorMarks: number[] = [];
   for (let t = 0; t <= durationSec + rulerStepSec; t += rulerStepSec) {
     rulerMarks.push(t);
+    for (let i = 1; i < RULER_MINOR_SUBDIVISIONS; i++) {
+      rulerMinorMarks.push(t + i * rulerMinorStepSec);
+    }
   }
 
   const interactionRef = useRef<Interaction | null>(null);
@@ -379,6 +386,16 @@ export function TimelineTracks({
 
         <div style={{ width: totalWidth }} className="relative" onMouseDown={handleTimelineMouseDown}>
           <div className="relative h-6 shrink-0 border-b border-white/10">
+            {rulerMinorMarks.map((t) => (
+              <span
+                key={t}
+                className="absolute bottom-0 h-1.5 w-px bg-white/15"
+                style={{ left: t * pxPerSec }}
+              />
+            ))}
+            {rulerMarks.map((t) => (
+              <span key={t} className="absolute bottom-0 h-2.5 w-px bg-white/30" style={{ left: t * pxPerSec }} />
+            ))}
             {rulerMarks.map((t) => (
               <span
                 key={t}

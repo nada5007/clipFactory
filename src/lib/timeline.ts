@@ -583,6 +583,18 @@ export function clampClipTiming(input: {
 
 export const MIN_CLIP_DURATION_MS = 100;
 
+// 타임라인 눈금자 간격: "보기 좋은 숫자" 후보 중 라벨 간 픽셀 간격이 최소 기준(가독성) 이상이 되는
+// 가장 촘촘한(작은) 간격을 고른다 — 줌을 올릴수록 더 촘촘한 눈금이 자동으로 나온다.
+export const NICE_RULER_STEPS_SEC = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800] as const;
+const MIN_RULER_LABEL_SPACING_PX = 100;
+
+export function computeRulerStepSec(pxPerSec: number): number {
+  for (const step of NICE_RULER_STEPS_SEC) {
+    if (step * pxPerSec >= MIN_RULER_LABEL_SPACING_PX) return step;
+  }
+  return NICE_RULER_STEPS_SEC[NICE_RULER_STEPS_SEC.length - 1];
+}
+
 // 트림(양끝 조절바 드래그): duration이 바뀔 수 있다는 점이 drag(clampClipTiming)와 다르다.
 export function clampTrimStart(input: {
   startMs: number;

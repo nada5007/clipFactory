@@ -299,6 +299,7 @@ function PlaybackToolbar({
   onSnapChange,
   editTools,
   showSpeedAndZoom = true,
+  onToggleFullscreen,
 }: {
   isPlaying: boolean;
   onTogglePlay: () => void;
@@ -317,6 +318,7 @@ function PlaybackToolbar({
   // 속도/줌 슬라이더는 화면 맨 위 툴바에만 두고, 타임라인 트랙 바로 위 툴바(editTools와 함께 쓰는 쪽)에서는
   // 감춘다 — 아이콘까지 함께 있으면 좁은 화면에서 배치가 찌그러지기 때문(기본값 true).
   showSpeedAndZoom?: boolean;
+  onToggleFullscreen?: () => void;
 }) {
   // 참조 사이트 캡처 기준: 현재 재생 시각/총 길이 표시는 재생 버튼 그룹보다 왼쪽에 온다.
   const timeDisplay = (
@@ -370,14 +372,19 @@ function PlaybackToolbar({
           <span className="w-9 shrink-0">{zoom}%</span>
         </div>
       )}
-      <span className={cn("shrink-0 rounded-full bg-white/5 px-2 py-0.5", !editTools && "ml-auto")}>
-        ⓘ Preview Mode — 애니메이션/전환효과는 렌더링 후 확인
-      </span>
+      {/* 트랙 위 툴바(editTools 인스턴스)에서는 자리를 많이 차지하고 상단 툴바와 중복이라 생략한다. */}
+      {!editTools && (
+        <span className="ml-auto shrink-0 rounded-full bg-white/5 px-2 py-0.5">
+          ⓘ Preview Mode — 애니메이션/전환효과는 렌더링 후 확인
+        </span>
+      )}
       <label className="flex shrink-0 items-center gap-1">
         <Checkbox checked={snapEnabled} onCheckedChange={(v) => onSnapChange(Boolean(v))} />
         스냅
       </label>
-      <Maximize2 className="size-3.5 shrink-0" />
+      <button onClick={onToggleFullscreen} className="text-white/60 hover:text-white" title="미리보기 전체화면 (ESC로 종료)">
+        <Maximize2 className="size-3.5 shrink-0" />
+      </button>
     </>
   );
 
@@ -416,6 +423,9 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const [zoom, setZoom] = useState(100);
   // 편집 프리뷰 전용 재생 속도(§5.5) — 합성 미리보기 재생 기능은 다음 라운드에서 이 값을 소비할 예정.
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  // "미리보기 재생 볼륨" — 지금까지 이 개념이 없어서(BGM은 프로젝트 설정 dB만, TTS는 볼륨 설정 자체가
+  // 없었음) 새로 도입한다. 전체화면 중 상하 화살표로 조절한다.
+  const [previewVolume, setPreviewVolume] = useState(1);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [snapIntervalMs, setSnapIntervalMs] = useState(100);
   const [dismissedLints, setDismissedLints] = useState<Set<string>>(new Set());
@@ -583,9 +593,9 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     if (!audio || !bgmSettings) return;
     audio.src = `/api/bgm/${bgmSettings.trackId}/file`;
     audio.loop = bgmSettings.loop;
-    audio.volume = Math.min(1, Math.max(0, 10 ** (bgmSettings.volumeDb / 20)));
+    audio.volume = Math.min(1, Math.max(0, 10 ** (bgmSettings.volumeDb / 20))) * previewVolume;
     audio.playbackRate = bgmSettings.playbackSpeed;
-  }, [bgmSettings]);
+  }, [bgmSettings, previewVolume]);
 
   // TTS 순차 재생 등 "트랙 하나가 필요한" 곳에서 쓴다 — visible한 트랙 중 order가 가장 작은
   // (우선순위가 가장 높은) 트랙 하나를 고른다.
@@ -652,6 +662,30 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   // 폰트 크기/위치/테두리 두께 같은 절대 px 값들을 실제 해상도 대비 미리보기 박스 크기 비율만큼
   // 축소해, 실제 영상과 같은 비율로 보이게 한다.
   const previewScale = previewBoxSize.width > 0 ? previewBoxSize.width / videoResolution.width : 1;
+
+  // 미리보기 영역 전체화면(브라우저 Fullscreen API) — ESC로 종료하는 것은 브라우저 기본 동작이라
+  // 별도 처리가 필요 없다. previewWrapperRef가 전체화면이 되면 위 ResizeObserver가 새 뷰포트 크기를
+  // 다시 재서 영상 박스를 그대로 꽉 채운다.
+  const [isPreviewFullscreen, setIsPreviewFullscreen] = useState(false);
+  useEffect(() => {
+    function handleFullscreenChange() {
+      setIsPreviewFullscreen(document.fullscreenElement === previewWrapperRef.current);
+    }
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  function togglePreviewFullscreen() {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      previewWrapperRef.current?.requestFullscreen();
+    }
+  }
+
+  useEffect(() => {
+    if (ttsAudioRef.current) ttsAudioRef.current.volume = previewVolume;
+  }, [previewVolume]);
 
   function playTtsFrom(atMs: number) {
     const ttsClips = getTrackClips("TTS");
@@ -748,6 +782,33 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     }
     window.addEventListener("keydown", handlePlaybackKeys);
     return () => window.removeEventListener("keydown", handlePlaybackKeys);
+  }, []);
+
+  // 미리보기 전체화면 전용 단축키: 좌우 화살표 10초 탐색, 상하 화살표 볼륨 조절. 스페이스바는 위
+  // 전역 단축키를 그대로 쓴다. 전체화면이 아닐 때는 다른 UI(예: 클립 선택)와 겹치지 않도록 끈다.
+  const fullscreenShortcutsRef = useRef({ isPreviewFullscreen, seekTo, playheadMs, previewVolume });
+  fullscreenShortcutsRef.current = { isPreviewFullscreen, seekTo, playheadMs, previewVolume };
+
+  useEffect(() => {
+    function handleFullscreenKeys(e: KeyboardEvent) {
+      const { isPreviewFullscreen: active, seekTo: seek, playheadMs: ms, previewVolume: vol } = fullscreenShortcutsRef.current;
+      if (!active) return;
+      if (e.code === "ArrowLeft") {
+        e.preventDefault();
+        seek(Math.max(0, ms - 10000));
+      } else if (e.code === "ArrowRight") {
+        e.preventDefault();
+        seek(ms + 10000);
+      } else if (e.code === "ArrowUp") {
+        e.preventDefault();
+        setPreviewVolume(Math.min(1, vol + 0.1));
+      } else if (e.code === "ArrowDown") {
+        e.preventDefault();
+        setPreviewVolume(Math.max(0, vol - 0.1));
+      }
+    }
+    window.addEventListener("keydown", handleFullscreenKeys);
+    return () => window.removeEventListener("keydown", handleFullscreenKeys);
   }, []);
 
   function handleValidate() {
@@ -1197,7 +1258,13 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
           <Button variant="outline" size="sm" className={OUTLINE_BTN} onClick={handleValidate}>
             유효성 검사
           </Button>
-          <Button variant="outline" size="sm" className={OUTLINE_BTN}>
+          <Button
+            variant="outline"
+            size="sm"
+            className={OUTLINE_BTN}
+            onClick={() => setDismissedLints(new Set())}
+            title="무시했던 품질 분석 결과를 다시 표시"
+          >
             품질 분석 {lint.exceedingIds.length > 0 && `(${lint.exceedingIds.length})`}
           </Button>
           <Button variant="outline" size="sm" className={OUTLINE_BTN_DISABLED} disabled>
@@ -1243,6 +1310,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
               onZoomChange={setZoom}
               snapEnabled={snapEnabled}
               onSnapChange={setSnapEnabled}
+              onToggleFullscreen={togglePreviewFullscreen}
             />
           )}
           <div className="flex-1 overflow-y-auto p-4">
@@ -1287,7 +1355,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
             </div>
           )}
           {activeTab === "preview" && (
-            <div ref={previewWrapperRef} className="flex h-full w-full items-center justify-center">
+            <div ref={previewWrapperRef} className="flex h-full w-full items-center justify-center bg-black">
               <div
                 ref={previewContainerRef}
                 className="relative overflow-hidden rounded-lg bg-black"
@@ -1418,42 +1486,11 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
           className="w-1 shrink-0 cursor-col-resize bg-white/5 hover:bg-primary/60 active:bg-primary"
         />
 
-        {/* 우측 컬럼: 품질 분석 + 속성 패널 */}
+        {/* 우측 컬럼: 속성 패널 (품질 분석은 그 오른쪽 별도 컬럼으로 분리됨) */}
         <div
           style={{ width: rightPanelWidth }}
           className="flex shrink-0 flex-col gap-3 overflow-y-auto border-l border-white/10 p-3 text-xs"
         >
-          {lintVisible && (
-            <div className="rounded-md border border-sky-400/40 bg-sky-400/10 p-3">
-              <p className="mb-1 flex items-center justify-between font-medium text-sky-200">
-                품질 분석 <span>모두 무시</span>
-              </p>
-              <p className="text-white/80">
-                ⚠ 자막 {lint.exceedingIds.length}개의 줄 길이가 {lint.maxLength}자를 초과합니다
-              </p>
-              <p className="mt-1 text-white/50">
-                권장: {RECOMMENDED_SUBTITLE_CHARS_PER_LINE}자/줄 | 현재 최대: {lint.maxLength}자
-              </p>
-              <p className="mt-1 text-white/50">
-                롱폼 한국어 자막은 {RECOMMENDED_SUBTITLE_CHARS_PER_LINE}자/줄이 가장 읽기 좋습니다 (Netflix 기준
-                16자, 롱폼 기준)
-              </p>
-              <div className="mt-2 flex gap-2">
-                <Button size="sm" variant="outline" className={OUTLINE_BTN} onClick={handleFixSubtitleLineLength}>
-                  자동 줄바꿈으로 수정
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="text-white/50 hover:bg-white/10 hover:text-white/80"
-                  onClick={() => setDismissedLints((prev) => new Set(prev).add("subtitle-line-length"))}
-                >
-                  무시
-                </Button>
-              </div>
-            </div>
-          )}
-
           {validation && (
             <div
               className={cn(
@@ -1619,6 +1656,39 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
             )}
           </div>
         </div>
+
+        {/* 속성 패널 오른쪽 별도 컬럼: 품질 분석. "모두 무시"는 전체 패널을 숨기고, 화면 맨 위 "품질 분석"
+            버튼으로 다시 표시한다. */}
+        {lintVisible && (
+          <div className="w-72 shrink-0 overflow-y-auto border-l border-white/10 p-3 text-xs">
+            <div className="rounded-md border border-sky-400/40 bg-sky-400/10 p-3">
+              <p className="mb-1 flex items-center justify-between font-medium text-sky-200">
+                품질 분석
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-white/50 hover:bg-white/10 hover:text-white/80"
+                  onClick={() => setDismissedLints((prev) => new Set(prev).add("subtitle-line-length"))}
+                >
+                  모두 무시
+                </Button>
+              </p>
+              <p className="text-white/80">
+                ⚠ 자막 {lint.exceedingIds.length}개의 줄 길이가 {lint.maxLength}자를 초과합니다
+              </p>
+              <p className="mt-1 text-white/50">
+                권장: {RECOMMENDED_SUBTITLE_CHARS_PER_LINE}자/줄 | 현재 최대: {lint.maxLength}자
+              </p>
+              <p className="mt-1 text-white/50">
+                롱폼 한국어 자막은 {RECOMMENDED_SUBTITLE_CHARS_PER_LINE}자/줄이 가장 읽기 좋습니다 (Netflix 기준
+                16자, 롱폼 기준)
+              </p>
+              <Button size="sm" variant="outline" className={cn("mt-2", OUTLINE_BTN)} onClick={handleFixSubtitleLineLength}>
+                자동 줄바꿈으로 수정
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 재생 툴바(좌)와 편집 도구 아이콘(중앙)을 한 줄에 배치(참조 사이트 레이아웃). 호흡구간(ms)/목표
@@ -1638,6 +1708,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
           snapEnabled={snapEnabled}
           onSnapChange={setSnapEnabled}
           showSpeedAndZoom={false}
+          onToggleFullscreen={togglePreviewFullscreen}
           editTools={
             <>
               <IconToolbarButton icon={Undo2} label="실행 취소 (Ctrl+Z)" onClick={handleUndo} disabled={history.length === 0} />

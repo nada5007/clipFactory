@@ -9,6 +9,7 @@ import {
   computeAudioRenderPlan,
   computeImageRenderSegments,
   computeSplitTimes,
+  computeRulerStepSec,
   computeTimelineStats,
   computeCoveredClipIds,
   findClipAtMsByPriority,
@@ -554,5 +555,30 @@ describe("findClipAtMsByPriority", () => {
   it("어느 트랙에도 그 시각을 덮는 클립이 없으면 null을 반환한다", () => {
     const tracks = [{ type: "IMAGE" as const, order: 0, visible: true, clips: [clip("a", 0, 500)] }];
     expect(findClipAtMsByPriority(tracks, "IMAGE", 900)).toBeNull();
+  });
+});
+
+describe("computeRulerStepSec", () => {
+  it("픽셀 간격이 좁을수록(축소 상태) 더 큰 간격을 고른다", () => {
+    expect(computeRulerStepSec(6)).toBe(30); // 줌 30%
+  });
+
+  it("픽셀 간격이 넓을수록(확대 상태) 더 촘촘한 간격을 고른다", () => {
+    expect(computeRulerStepSec(100)).toBe(1); // 줌 500%
+  });
+
+  it("줌을 올릴수록(픽셀 간격이 넓어질수록) 간격이 단조 감소한다", () => {
+    const pxPerSecValues = [6, 10, 20, 40, 60, 100];
+    const steps = pxPerSecValues.map(computeRulerStepSec);
+    for (let i = 1; i < steps.length; i++) {
+      expect(steps[i]).toBeLessThanOrEqual(steps[i - 1]);
+    }
+  });
+
+  it("어떤 픽셀 간격에서도 라벨 사이 실제 간격은 최소 기준 이상이다", () => {
+    for (const pxPerSec of [1, 3, 6, 10, 20, 40, 100, 500]) {
+      const step = computeRulerStepSec(pxPerSec);
+      expect(step * pxPerSec).toBeGreaterThanOrEqual(100 * 0.999); // 부동소수점 여유
+    }
   });
 });
