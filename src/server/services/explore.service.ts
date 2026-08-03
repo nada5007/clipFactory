@@ -37,14 +37,43 @@ export async function getNichePopularVideos(niche: string) {
 }
 
 const IDEA_MARKET_SAMPLE_SIZE = 25;
+const NICHE_TOP_PERFORMER_SAMPLE_SIZE = 25;
+
+export type NicheTopPerformer = { niche: string; title: string; viewCount: number; vph: number };
+
+// PROJECT_SPEC.md §2.3 "홈 (2.1) — 실제 성과를 니치 안에서 반영": 생성 그라운딩용. 니치를 실제로
+// 검색해 지금 성과가 좋은(VPH 높은) 영상 상위 N개를 뽑아 LLM 프롬프트에 근거로 넣는다. 이러면
+// 아이디어가 니치 안에서 실제 성과 데이터에 기반해 생성된다.
+export async function getNicheTopPerformers(
+  niche: string,
+  count = 5,
+  now: Date = new Date(),
+): Promise<NicheTopPerformer[]> {
+  const search = await searchVideos({ q: niche, regionCode: "KR", maxResults: NICHE_TOP_PERFORMER_SAMPLE_SIZE });
+  const videoIds = Array.from(new Set(search.items.map((item) => item.id.videoId)));
+  if (videoIds.length === 0) return [];
+
+  const videos = await fetchVideosInBatches(videoIds);
+  return videos
+    .map((v) => {
+      const viewCount = Number(v.statistics.viewCount ?? 0);
+      return { niche, title: v.snippet.title, viewCount, vph: computeVph(viewCount, v.snippet.publishedAt, now) };
+    })
+    .sort((a, b) => b.vph - a.vph)
+    .slice(0, count);
+}
 
 // PROJECT_SPEC.md §2.3 "홈 (2.1) — AI 주관 점수 + 실제 성과 점수 혼합 랭킹": "오늘의 AI 아이디어"의
 // 각 아이디어에 붙일 "실제 성과 점수(marketScore, 0~100)"를 산출한다. 아이디어 자체는 존재하지 않는
 // 기획이라 자체 조회수가 없으므로, 대표 키워드로 실제 영상을 검색해 그 주제 시장의 조회수 분포·최신성을
 // 프록시로 쓴다(computeKeywordMarketScore의 searchVolumeScore를 그대로 재사용). 비용은 아이디어당
-// 검색 1회로 제한한다.
-export async function computeIdeaMarketScore(keywords: string[]): Promise<number> {
-  const query = keywords.slice(0, 3).join(" ").trim();
+// 검색 1회로 제한한다. nicheContext가 있으면 쿼리에 앞세워 "니치 안에서의 성과"만 재도록 한다(후속 개선).
+export async function computeIdeaMarketScore(keywords: string[], nicheContext?: string): Promise<number> {
+  const niche = nicheContext?.trim();
+  const query = [niche, ...keywords.slice(0, niche ? 2 : 3)]
+    .filter((v): v is string => Boolean(v && v.trim()))
+    .join(" ")
+    .trim();
   if (!query) return 0;
 
   const search = await searchVideos({ q: query, regionCode: "KR", maxResults: IDEA_MARKET_SAMPLE_SIZE });

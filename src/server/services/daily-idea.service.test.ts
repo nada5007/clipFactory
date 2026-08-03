@@ -4,7 +4,7 @@ import { generateDailyIdeas } from "@/lib/clients/anthropic";
 import { listPopularVideos } from "@/lib/clients/youtube";
 import { prisma } from "@/lib/prisma";
 import { generateTodayIdeas, getTodayIdeas, todayDateString } from "@/server/services/daily-idea.service";
-import { computeIdeaMarketScore } from "@/server/services/explore.service";
+import { computeIdeaMarketScore, getNicheTopPerformers } from "@/server/services/explore.service";
 import { listNiches, setNiches } from "@/server/services/niche.service";
 
 vi.mock("@/lib/clients/anthropic", () => ({ generateDailyIdeas: vi.fn() }));
@@ -14,12 +14,16 @@ vi.mock("@/lib/clients/youtube", async () => {
   return { ...actual, listPopularVideos: vi.fn() };
 });
 
-// 실제 성과 점수는 YouTube 검색을 타므로 서비스 경계에서 모킹한다(네트워크 배제·결정론적 테스트).
-vi.mock("@/server/services/explore.service", () => ({ computeIdeaMarketScore: vi.fn().mockResolvedValue(50) }));
+// 실제 성과 점수·니치 상위 성과 수집은 YouTube 검색을 타므로 서비스 경계에서 모킹한다(네트워크 배제·결정론).
+vi.mock("@/server/services/explore.service", () => ({
+  computeIdeaMarketScore: vi.fn().mockResolvedValue(50),
+  getNicheTopPerformers: vi.fn().mockResolvedValue([]),
+}));
 
-function fakeIdeas(seed: string) {
+function fakeIdeas(seed: string, niche = "") {
   return Array.from({ length: 5 }, (_, i) => ({
     title: `${seed}-${i}`,
+    niche,
     recommendScore: 80,
     whyGood: "이유",
     hook: "훅",
@@ -46,6 +50,7 @@ describe("daily-idea.service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(computeIdeaMarketScore).mockResolvedValue(50);
+    vi.mocked(getNicheTopPerformers).mockResolvedValue([]);
   });
   afterEach(async () => {
     await prisma.dailyIdea.deleteMany({ where: { date: TEST_DATE } });
@@ -85,6 +90,54 @@ describe("daily-idea.service", () => {
     const ideas = result.ideasJson as { marketScore: number; recommendScore: number }[];
     expect(ideas.every((i) => i.marketScore === 73)).toBe(true);
     expect(ideas.every((i) => i.recommendScore === 80)).toBe(true);
+  });
+
+  it("각 니치의 실제 상위 성과 영상을 모아 생성 프롬프트에 근거로 넘긴다(생성 그라운딩)", async () => {
+    await setNiches(["이슈·정치 시사", "쇼츠·밈"]);
+    vi.mocked(listPopularVideos).mockResolvedValue({ items: [] });
+    vi.mocked(getNicheTopPerformers).mockImplementation(async (niche: string) => [
+      { niche, title: `${niche} 상위영상`, viewCount: 100000, vph: 500 },
+    ]);
+    vi.mocked(generateDailyIdeas).mockResolvedValue(fakeIdeas("grounded", "이슈·정치 시사"));
+
+    await generateTodayIdeas({ mode: "auto" }, NOW);
+
+    expect(getNicheTopPerformers).toHaveBeenCalledWith("이슈·정치 시사", 5, NOW);
+    expect(getNicheTopPerformers).toHaveBeenCalledWith("쇼츠·밈", 5, NOW);
+    expect(generateDailyIdeas).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "auto",
+        nichePerformers: [
+          { niche: "이슈·정치 시사", title: "이슈·정치 시사 상위영상", viewCount: 100000, vph: 500 },
+          { niche: "쇼츠·밈", title: "쇼츠·밈 상위영상", viewCount: 100000, vph: 500 },
+        ],
+      }),
+    );
+  });
+
+  it("marketScore 계산 시 아이디어의 소속 니치를 검색 문맥으로 넘긴다(니치 범위 성과)", async () => {
+    vi.mocked(listPopularVideos).mockResolvedValue({ items: [] });
+    vi.mocked(generateDailyIdeas).mockResolvedValue(fakeIdeas("scoped", "이슈·정치 시사"));
+
+    await generateTodayIdeas({ mode: "auto" }, NOW);
+
+    expect(computeIdeaMarketScore).toHaveBeenCalledWith(["a"], "이슈·정치 시사");
+  });
+
+  it("한 니치의 상위 성과 수집이 실패해도 생성은 계속된다", async () => {
+    await setNiches(["니치A", "니치B"]);
+    vi.mocked(listPopularVideos).mockResolvedValue({ items: [] });
+    vi.mocked(getNicheTopPerformers)
+      .mockRejectedValueOnce(new Error("쿼터 초과"))
+      .mockResolvedValue([{ niche: "니치B", title: "B 상위", viewCount: 1, vph: 1 }]);
+    vi.mocked(generateDailyIdeas).mockResolvedValue(fakeIdeas("resilient", "니치B"));
+
+    const result = await generateTodayIdeas({ mode: "auto" }, NOW);
+
+    expect(result).toBeDefined();
+    expect(generateDailyIdeas).toHaveBeenCalledWith(
+      expect.objectContaining({ nichePerformers: [{ niche: "니치B", title: "B 상위", viewCount: 1, vph: 1 }] }),
+    );
   });
 
   it("marketScore 계산이 실패한 아이디어는 0으로 저장되고 나머지 생성은 계속된다", async () => {

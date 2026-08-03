@@ -17,8 +17,8 @@ const WELCOME_DISMISSED_KEY = "clipfactory:home-welcome-dismissed";
 const IDEA_BLEND_KEY = "clipfactory:idea-blend-weight";
 const DEFAULT_BLEND_WEIGHT = 60;
 
-// marketScore는 이 기능 도입 이후 생성된 아이디어에만 있다(이전 저장분은 undefined일 수 있음).
-type ScoredIdea = DailyIdea & { marketScore?: number };
+// marketScore/niche는 이 기능 도입 이후 생성된 아이디어에만 있다(이전 저장분은 undefined일 수 있음).
+type ScoredIdea = DailyIdea & { marketScore?: number; niche?: string };
 type DailyIdeaRecord = { id: string; date: string; mode: string; niches: unknown; ideasJson: ScoredIdea[] };
 type SavedItem = { id: string; type: "VIDEO" | "CHANNEL" | "IDEA"; snapshotJson: Record<string, unknown>; createdAt: string };
 
@@ -377,7 +377,14 @@ export function HomeClient() {
             {rankedIdeas.map(({ idea, originalIndex, market, blended }) => (
               <div key={originalIndex} className="flex flex-col gap-1 rounded-lg border p-3 text-sm">
                 <div className="flex items-start justify-between gap-2">
-                  <p className="font-medium">{idea.title}</p>
+                  <div className="flex min-w-0 items-center gap-2">
+                    {idea.niche && (
+                      <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                        {idea.niche}
+                      </span>
+                    )}
+                    <p className="font-medium">{idea.title}</p>
+                  </div>
                   <div className="flex shrink-0 items-center gap-1.5">
                     <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
                       강추 {blended}

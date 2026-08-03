@@ -9,6 +9,7 @@ import {
   browseVideos,
   computeIdeaMarketScore,
   getNichePopularVideos,
+  getNicheTopPerformers,
   suggestRelatedKeywords,
 } from "@/server/services/explore.service";
 
@@ -374,5 +375,58 @@ describe("computeIdeaMarketScore", () => {
     expect(searchVideos).toHaveBeenCalledWith(expect.objectContaining({ q: "게임중독 실험 챌린지", regionCode: "KR" }));
     expect(score).toBeGreaterThan(0);
     expect(score).toBeLessThanOrEqual(100);
+  });
+
+  it("니치 문맥이 주어지면 검색 쿼리 앞에 니치를 붙여 니치 안에서의 성과를 잰다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("v1")] });
+    vi.mocked(listVideos).mockResolvedValue({ items: [video({ id: "v1" })] });
+    vi.mocked(listChannels).mockResolvedValue({
+      items: [{ id: "c1", snippet: { title: "ch" }, statistics: { subscriberCount: "5000" }, contentDetails: { relatedPlaylists: { uploads: "u1" } } }],
+    });
+
+    await computeIdeaMarketScore(["게임중독", "실험", "챌린지"], "이슈·정치 시사");
+
+    // 니치 문맥이 있으면 니치 + 키워드 2개로 쿼리를 구성한다.
+    expect(searchVideos).toHaveBeenCalledWith(expect.objectContaining({ q: "이슈·정치 시사 게임중독 실험", regionCode: "KR" }));
+  });
+});
+
+describe("getNicheTopPerformers", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("검색 결과가 없으면 빈 배열을 반환한다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [] });
+    const result = await getNicheTopPerformers("부동산");
+    expect(result).toEqual([]);
+    expect(listVideos).not.toHaveBeenCalled();
+  });
+
+  it("니치를 검색해 VPH(시간당 조회수) 높은 순으로 상위 N개를 반환한다", async () => {
+    const now = new Date("2026-08-03T00:00:00.000Z");
+    const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("v1"), searchItem("v2")] });
+    vi.mocked(listVideos).mockResolvedValue({
+      items: [
+        video({ id: "v1", snippet: { title: "낮은 VPH", channelId: "c1", channelTitle: "ch", publishedAt: dayAgo }, statistics: { viewCount: "2400" } }),
+        video({ id: "v2", snippet: { title: "높은 VPH", channelId: "c1", channelTitle: "ch", publishedAt: dayAgo }, statistics: { viewCount: "24000" } }),
+      ],
+    });
+
+    const result = await getNicheTopPerformers("이슈·정치 시사", 5, now);
+
+    expect(searchVideos).toHaveBeenCalledWith(expect.objectContaining({ q: "이슈·정치 시사", regionCode: "KR" }));
+    expect(result[0].title).toBe("높은 VPH"); // VPH 내림차순
+    expect(result[0].niche).toBe("이슈·정치 시사");
+    expect(result[0].vph).toBeGreaterThan(result[1].vph);
+  });
+
+  it("count로 상위 개수를 제한한다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("v1"), searchItem("v2"), searchItem("v3")] });
+    vi.mocked(listVideos).mockResolvedValue({
+      items: [video({ id: "v1" }), video({ id: "v2" }), video({ id: "v3" })],
+    });
+
+    const result = await getNicheTopPerformers("부동산", 2);
+    expect(result).toHaveLength(2);
   });
 });

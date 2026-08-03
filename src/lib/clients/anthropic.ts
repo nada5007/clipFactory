@@ -457,6 +457,9 @@ const dailyIdeaSchema = z.object({
     .array(
       z.object({
         title: z.string().describe("아이디어 제목 (밈체 허용)"),
+        niche: z
+          .string()
+          .describe("이 아이디어가 속한 니치 — 자동 모드에서는 제공된 니치 목록 중 정확히 하나. 해당 없으면 빈 문자열"),
         recommendScore: z.number().min(0).max(100).describe("추천 점수 (강추 {점수})"),
         whyGood: z.string().describe("왜 좋은가 — 트렌드 근거 한 문장"),
         hook: z.string().describe("후킹 — 영상 시작 3초용 문구"),
@@ -469,19 +472,34 @@ const dailyIdeaSchema = z.object({
 
 export type DailyIdea = z.infer<typeof dailyIdeaSchema>["ideas"][number];
 
+export type NichePerformerContext = { niche: string; title: string; viewCount: number; vph: number };
+
 export type GenerateDailyIdeasInput =
-  | { mode: "auto"; niches: string[]; trendTitles?: string[] }
+  | { mode: "auto"; niches: string[]; trendTitles?: string[]; nichePerformers?: NichePerformerContext[] }
   | { mode: "manual"; topic: string; targetAudience?: string; category?: string };
 
 export async function generateDailyIdeas(input: GenerateDailyIdeasInput): Promise<DailyIdea[]> {
   const client = getClient();
 
+  // 니치별 실제 상위 성과 영상을 프롬프트에 근거로 넣어(retrieval-grounded), 아이디어가 니치 안에서
+  // 실제 성과 데이터에 기반해 생성되도록 한다.
+  const nichePerformerLines =
+    input.mode === "auto" && input.nichePerformers && input.nichePerformers.length > 0
+      ? [
+          "니치별 실제 상위 성과 영상 (지금 YouTube에서 성과 좋은 실제 영상 — 제목 · 조회수 · VPH(시간당 조회수)):",
+          ...input.nichePerformers.map(
+            (p) => `- [${p.niche}] ${p.title} (조회수 ${p.viewCount.toLocaleString("ko-KR")} · VPH ${Math.round(p.vph)})`,
+          ),
+        ]
+      : [];
+
   const context =
     input.mode === "auto"
       ? [
           `니치(관심 카테고리): ${input.niches.length > 0 ? input.niches.join(", ") : "미설정 — 범용 인기 소재로 생성"}`,
+          ...nichePerformerLines,
           input.trendTitles && input.trendTitles.length > 0
-            ? `최근 인기 영상 제목(트렌드 참고용): ${input.trendTitles.slice(0, 20).join(" / ")}`
+            ? `참고용 전국 인기 영상 제목(니치 무관 트렌드): ${input.trendTitles.slice(0, 20).join(" / ")}`
             : undefined,
         ]
           .filter((line): line is string => Boolean(line))
@@ -494,6 +512,13 @@ export async function generateDailyIdeas(input: GenerateDailyIdeasInput): Promis
           .filter((line): line is string => Boolean(line))
           .join("\n");
 
+  const autoNicheRule =
+    input.mode === "auto" && input.niches.length > 0
+      ? `모든 아이디어는 반드시 제공된 니치(${input.niches.join(", ")}) 중 하나에 확실히 속해야 하며, ` +
+        "니치를 벗어난 소재는 절대 제안하지 마라. 각 아이디어의 niche 필드에 그 아이디어가 속한 니치를 정확히 적는다. " +
+        "위 '니치별 실제 상위 성과 영상'의 성공 포맷·주제를 반영하되 그대로 베끼지 말고 새롭게 변주한다. "
+      : "각 아이디어의 niche 필드에는 해당 니치가 있으면 적고, 없으면 빈 문자열을 둔다. ";
+
   const response = await client.messages.parse({
     model: MODEL,
     max_tokens: 8000,
@@ -501,7 +526,8 @@ export async function generateDailyIdeas(input: GenerateDailyIdeasInput): Promis
     output_config: { effort: "medium", format: zodOutputFormat(dailyIdeaSchema) },
     system:
       "너는 한국어 YouTube 쇼츠 기획자다. 주어진 니치(또는 토픽)를 바탕으로 오늘 만들 만한 쇼츠 아이디어 5개를 제안한다. " +
-      "각 아이디어는 제목, 추천 점수(0~100), 왜 좋은지(트렌드 근거), 후킹(첫 3초 문구), 차별화 포인트, 키워드로 구성한다.",
+      autoNicheRule +
+      "각 아이디어는 제목, 소속 니치(niche), 추천 점수(0~100), 왜 좋은지(트렌드 근거), 후킹(첫 3초 문구), 차별화 포인트, 키워드로 구성한다.",
     messages: [{ role: "user", content: context }],
   });
 
