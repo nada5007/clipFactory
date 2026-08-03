@@ -36,6 +36,38 @@ export async function getNichePopularVideos(niche: string) {
   return videosResult.items;
 }
 
+const IDEA_MARKET_SAMPLE_SIZE = 25;
+
+// PROJECT_SPEC.md §2.3 "홈 (2.1) — AI 주관 점수 + 실제 성과 점수 혼합 랭킹": "오늘의 AI 아이디어"의
+// 각 아이디어에 붙일 "실제 성과 점수(marketScore, 0~100)"를 산출한다. 아이디어 자체는 존재하지 않는
+// 기획이라 자체 조회수가 없으므로, 대표 키워드로 실제 영상을 검색해 그 주제 시장의 조회수 분포·최신성을
+// 프록시로 쓴다(computeKeywordMarketScore의 searchVolumeScore를 그대로 재사용). 비용은 아이디어당
+// 검색 1회로 제한한다.
+export async function computeIdeaMarketScore(keywords: string[]): Promise<number> {
+  const query = keywords.slice(0, 3).join(" ").trim();
+  if (!query) return 0;
+
+  const search = await searchVideos({ q: query, regionCode: "KR", maxResults: IDEA_MARKET_SAMPLE_SIZE });
+  const videoIds = Array.from(new Set(search.items.map((item) => item.id.videoId)));
+  if (videoIds.length === 0) return 0;
+
+  const videos = await fetchVideosInBatches(videoIds);
+  const channelIds = Array.from(new Set(videos.map((v) => v.snippet.channelId)));
+  const subscriberByChannelId = await fetchChannelSubscribersInBatches(channelIds);
+
+  const result = computeKeywordMarketScore(
+    videos.map((v) => ({
+      viewCount: Number(v.statistics.viewCount ?? 0),
+      likeCount: Number(v.statistics.likeCount ?? 0),
+      publishedAt: v.snippet.publishedAt,
+      channelId: v.snippet.channelId,
+    })),
+    channelIds.map((id) => ({ id, subscriberCount: subscriberByChannelId.get(id) ?? 0 })),
+  );
+
+  return result.searchVolumeScore;
+}
+
 const KEYWORD_SEARCH_SAMPLE_SIZE = 50;
 const MAX_BULK_KEYWORDS = 10;
 const TOP_VIDEOS_DISPLAY_COUNT = 25;

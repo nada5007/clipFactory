@@ -7,6 +7,7 @@ import {
   analyzeKeywordMarketability,
   analyzeKeywordsBulk,
   browseVideos,
+  computeIdeaMarketScore,
   getNichePopularVideos,
   suggestRelatedKeywords,
 } from "@/server/services/explore.service";
@@ -329,5 +330,49 @@ describe("suggestRelatedKeywords", () => {
 
     expect(generateRelatedKeywords).toHaveBeenCalledWith("다이어트", 3);
     expect(result).toEqual(["다이어트 식단", "다이어트 운동", "다이어트 간헐적단식"]);
+  });
+});
+
+describe("computeIdeaMarketScore", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("키워드가 비어 있으면 검색 없이 0을 반환한다", async () => {
+    const score = await computeIdeaMarketScore([]);
+    expect(score).toBe(0);
+    expect(searchVideos).not.toHaveBeenCalled();
+  });
+
+  it("검색 결과가 없으면 0을 반환한다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [] });
+    const score = await computeIdeaMarketScore(["게임중독", "실험"]);
+    expect(score).toBe(0);
+  });
+
+  it("대표 키워드로 검색해 실제 영상 통계 기반 0~100 성과 점수를 산출한다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("v1"), searchItem("v2")] });
+    vi.mocked(listVideos).mockResolvedValue({
+      items: [
+        video({ id: "v1", statistics: { viewCount: "500000", likeCount: "8000" } }),
+        video({ id: "v2", statistics: { viewCount: "300000", likeCount: "5000" } }),
+      ],
+    });
+    vi.mocked(listChannels).mockResolvedValue({
+      items: [
+        {
+          id: "c1",
+          snippet: { title: "ch" },
+          statistics: { subscriberCount: "50000" },
+          contentDetails: { relatedPlaylists: { uploads: "u1" } },
+        },
+      ],
+    });
+
+    const score = await computeIdeaMarketScore(["게임중독", "실험", "챌린지"]);
+
+    expect(searchVideos).toHaveBeenCalledWith(expect.objectContaining({ q: "게임중독 실험 챌린지", regionCode: "KR" }));
+    expect(score).toBeGreaterThan(0);
+    expect(score).toBeLessThanOrEqual(100);
   });
 });

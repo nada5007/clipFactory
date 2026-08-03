@@ -457,6 +457,12 @@ reelbox는 YouTube + TikTok + Instagram + Douyin + Kuaishou 멀티플랫폼 검�
   2. 항목 클릭 시 `https://www.youtube.com/watch?v={영상ID}`를 새 탭에서 연다.
   3. `더보기` 링크는 탐색·분석 탭으로 이동하되, 현재 니치가 자동 선택된 상태로 이동한다 (`/analytics/explore?niche=...` 딥링크, 탐색·분석 탭에 니치 파라미터 처리 추가 필요).
 
+**홈 (2.1) "오늘의 AI 아이디어" — AI 주관 점수 + 실제 성과 점수 혼합 랭킹 (2026-08-03 요청)**: 지금까지 아이디어 카드의 "강추 N" 점수는 LLM이 스스로 매기는 주관 점수(`recommendScore`) 하나뿐이라 YouTube 실제 시장 성과와 단절돼 있었다. 사용자가 "LLM 주관 점수와 실제 조회수·성과 지표 두 가지를 사용자가 비율로 조정해 아이디어를 랭킹하고 싶다"고 요청. **핵심 전제(디스클로저)**: 아이디어는 아직 존재하지 않는 기획이라 자체 조회수가 없으므로, "실제 성과 점수(marketScore)"는 각 아이디어의 대표 키워드로 YouTube를 검색해 그 주제 실제 영상들의 조회수 분포·최신성으로 산출하는 **프록시**다(실제 아이디어의 성과가 아니라 그 주제 시장의 현재 성과). 구현:
+1. **marketScore 산출(0~100)**: `computeIdeaMarketScore(keywords)`를 `explore.service.ts`에 신규 추가 — 아이디어 대표 키워드로 `searchVideos`(KR, 25개) 후 `videos.list`/`channels.list`로 통계를 모아, 기존 `computeKeywordMarketScore`의 `searchVolumeScore`(조회수 분포 60% + 최신성 40%, 이미 검증된 로직)를 그대로 재사용한다. 아이디어당 검색 1회(=100 units)로 비용을 제한하고(기존 1시간 캐시 적용), 한 아이디어의 검색이 실패해도 그 아이디어만 marketScore 0으로 격리해 전체 생성이 죽지 않게 한다.
+2. **저장**: `generateTodayIdeas`가 LLM 생성 직후 각 아이디어에 marketScore를 병렬로 붙여(`ScoredDailyIdea = DailyIdea & { marketScore }`) `DailyIdea.ideasJson`에 함께 저장. 자동·직접 입력 두 모드 모두 적용.
+3. **비율 조정 UI(즉시 재정렬)**: 홈 "오늘의 AI 아이디어" 헤더 아래에 슬라이더("AI 감각 ↔ 실제 성과", α=0~100%)를 두고, 각 카드의 표시 점수 = `round(α·llmScore + (1−α)·marketScore)`로 **클라이언트에서 즉시 재계산·재정렬**한다(두 하위 점수를 이미 저장해두므로 API 재호출 없음). 카드에는 혼합 "강추" 점수와 함께 `AI {llmScore} · 성과 {marketScore}` 두 원천 점수를 병기한다. 슬라이더 기본값은 AI 60% / 성과 40%, 값은 localStorage에 저장해 다음 방문에도 유지한다. **디스클로저**: 비율은 이미 생성·저장된 아이디어의 표시 순서만 바꾸는 순수 클라이언트 재정렬이며, LLM/검색 재호출은 "재생성" 버튼에서만 일어난다.
+4. **문구 정정**: 기존 "# AI 생성. 자체 산출 — YouTube 데이터/추천 알고리즘과 무관." 안내는 marketScore가 실제 YouTube 데이터를 쓰므로 "혼합 점수 — AI 주관 점수 + 키워드 시장 성과(YouTube 실제 조회수 기반) 프록시"로 정정한다.
+
 **소스 발굴 (2.2) — UI 확장 요구사항 (2026-07-20 수정, 원본 서비스 스크린샷 기준)**
 - 최초 구현은 컨셉 입력 + 지역 1개 선택 + 한국 콘텐츠 제외 토글만 있는 축소판이었으나,
   원본 서비스 스크린샷 확인 결과 아래 폼 요소로 확장한다 (UI_SPEC.md §7.1 "소스 발굴" 문서 내용과 일치):

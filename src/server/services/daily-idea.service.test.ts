@@ -4,6 +4,7 @@ import { generateDailyIdeas } from "@/lib/clients/anthropic";
 import { listPopularVideos } from "@/lib/clients/youtube";
 import { prisma } from "@/lib/prisma";
 import { generateTodayIdeas, getTodayIdeas, todayDateString } from "@/server/services/daily-idea.service";
+import { computeIdeaMarketScore } from "@/server/services/explore.service";
 import { listNiches, setNiches } from "@/server/services/niche.service";
 
 vi.mock("@/lib/clients/anthropic", () => ({ generateDailyIdeas: vi.fn() }));
@@ -12,6 +13,9 @@ vi.mock("@/lib/clients/youtube", async () => {
   const actual = await vi.importActual<typeof import("@/lib/clients/youtube")>("@/lib/clients/youtube");
   return { ...actual, listPopularVideos: vi.fn() };
 });
+
+// 실제 성과 점수는 YouTube 검색을 타므로 서비스 경계에서 모킹한다(네트워크 배제·결정론적 테스트).
+vi.mock("@/server/services/explore.service", () => ({ computeIdeaMarketScore: vi.fn().mockResolvedValue(50) }));
 
 function fakeIdeas(seed: string) {
   return Array.from({ length: 5 }, (_, i) => ({
@@ -39,7 +43,10 @@ describe("daily-idea.service", () => {
     await setNiches(originalNiches);
   });
 
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(computeIdeaMarketScore).mockResolvedValue(50);
+  });
   afterEach(async () => {
     await prisma.dailyIdea.deleteMany({ where: { date: TEST_DATE } });
   });
@@ -65,6 +72,33 @@ describe("daily-idea.service", () => {
 
     const stored = await getTodayIdeas("auto", NOW);
     expect(stored?.id).toBe(result.id);
+  });
+
+  it("각 아이디어에 실제 성과 점수(marketScore)를 계산해 함께 저장한다", async () => {
+    vi.mocked(listPopularVideos).mockResolvedValue({ items: [] });
+    vi.mocked(generateDailyIdeas).mockResolvedValue(fakeIdeas("scored"));
+    vi.mocked(computeIdeaMarketScore).mockResolvedValue(73);
+
+    const result = await generateTodayIdeas({ mode: "auto" }, NOW);
+
+    expect(computeIdeaMarketScore).toHaveBeenCalledTimes(5);
+    const ideas = result.ideasJson as { marketScore: number; recommendScore: number }[];
+    expect(ideas.every((i) => i.marketScore === 73)).toBe(true);
+    expect(ideas.every((i) => i.recommendScore === 80)).toBe(true);
+  });
+
+  it("marketScore 계산이 실패한 아이디어는 0으로 저장되고 나머지 생성은 계속된다", async () => {
+    vi.mocked(listPopularVideos).mockResolvedValue({ items: [] });
+    vi.mocked(generateDailyIdeas).mockResolvedValue(fakeIdeas("fail"));
+    vi.mocked(computeIdeaMarketScore)
+      .mockRejectedValueOnce(new Error("쿼터 초과"))
+      .mockResolvedValue(60);
+
+    const result = await generateTodayIdeas({ mode: "auto" }, NOW);
+
+    const scores = (result.ideasJson as { marketScore: number }[]).map((i) => i.marketScore);
+    expect(scores.filter((s) => s === 0)).toHaveLength(1);
+    expect(scores.filter((s) => s === 60)).toHaveLength(4);
   });
 
   it("YouTube API가 실패해도 트렌드 없이 아이디어 생성을 진행한다", async () => {

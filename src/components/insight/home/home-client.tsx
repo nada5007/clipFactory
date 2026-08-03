@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import { NICHE_CATALOG, QUICK_SURGE_NICHES } from "@/lib/niche-catalog";
 import type { DailyIdea } from "@/lib/clients/anthropic";
@@ -12,8 +13,13 @@ import type { YoutubeVideo } from "@/lib/clients/youtube";
 
 const numberFormat = new Intl.NumberFormat("ko-KR");
 const WELCOME_DISMISSED_KEY = "clipfactory:home-welcome-dismissed";
+// AI 주관 점수와 실제 시장 성과 점수를 혼합하는 비율(α=AI 비중 %). localStorage에 저장해 방문 간 유지한다.
+const IDEA_BLEND_KEY = "clipfactory:idea-blend-weight";
+const DEFAULT_BLEND_WEIGHT = 60;
 
-type DailyIdeaRecord = { id: string; date: string; mode: string; niches: unknown; ideasJson: DailyIdea[] };
+// marketScore는 이 기능 도입 이후 생성된 아이디어에만 있다(이전 저장분은 undefined일 수 있음).
+type ScoredIdea = DailyIdea & { marketScore?: number };
+type DailyIdeaRecord = { id: string; date: string; mode: string; niches: unknown; ideasJson: ScoredIdea[] };
 type SavedItem = { id: string; type: "VIDEO" | "CHANNEL" | "IDEA"; snapshotJson: Record<string, unknown>; createdAt: string };
 
 function Chip({
@@ -56,6 +62,7 @@ export function HomeClient() {
   const [ideaGenerating, setIdeaGenerating] = useState(false);
   const [ideaError, setIdeaError] = useState<string | null>(null);
   const [savedIdeaIndexes, setSavedIdeaIndexes] = useState<Set<number>>(new Set());
+  const [blendWeight, setBlendWeight] = useState(DEFAULT_BLEND_WEIGHT); // AI 감각 비중(%). 나머지는 실제 성과.
 
   const [nicheVideos, setNicheVideos] = useState<YoutubeVideo[]>([]);
   const [recentSaved, setRecentSaved] = useState<SavedItem[]>([]);
@@ -83,10 +90,39 @@ export function HomeClient() {
     fetchNiches();
     setWelcomeDismissed(localStorage.getItem(WELCOME_DISMISSED_KEY) === "true");
 
+    const savedBlend = Number(localStorage.getItem(IDEA_BLEND_KEY));
+    if (Number.isFinite(savedBlend) && savedBlend >= 0 && savedBlend <= 100) setBlendWeight(savedBlend);
+
     fetch("/api/saved-items")
       .then((res) => res.json())
       .then((items: SavedItem[]) => setRecentSaved(items.slice(0, 5)));
   }, [fetchNiches]);
+
+  const changeBlendWeight = (value: number) => {
+    setBlendWeight(value);
+    try {
+      localStorage.setItem(IDEA_BLEND_KEY, String(value));
+    } catch {
+      // localStorage 접근 불가 환경에서도 조정 자체는 동작해야 하므로 무시한다.
+    }
+  };
+
+  // 두 점수(AI 주관 recommendScore, 실제 성과 marketScore)를 α 비율로 혼합해 표시 점수를 계산하고
+  // 그 순서로 재정렬한다. 저장 상태 추적(savedIdeaIndexes)은 원본 인덱스 기준이라 originalIndex를 보존한다.
+  const rankedIdeas = useMemo(() => {
+    if (!todayIdea) return [];
+    const alpha = blendWeight / 100;
+    return todayIdea.ideasJson
+      .map((idea, originalIndex) => {
+        const market = typeof idea.marketScore === "number" ? idea.marketScore : null;
+        const blended =
+          market === null ? idea.recommendScore : Math.round(alpha * idea.recommendScore + (1 - alpha) * market);
+        return { idea, originalIndex, market, blended };
+      })
+      .sort((a, b) => b.blended - a.blended);
+  }, [todayIdea, blendWeight]);
+
+  const hasMarketScores = rankedIdeas.some((r) => r.market !== null);
 
   // 자동/직접 입력 모드는 서로 독립된 결과를 가지므로, 모드를 바꾸면 그 모드의 오늘자 결과를 다시 불러온다.
   useEffect(() => {
@@ -275,6 +311,24 @@ export function HomeClient() {
           </Button>
         </div>
 
+        {/* AI 주관 점수 vs 실제 시장 성과 점수 혼합 비율. 조정 시 API 재호출 없이 즉시 재정렬된다. */}
+        {todayIdea && hasMarketScores && (
+          <div className="mb-3 flex items-center gap-3 rounded-lg bg-muted/50 px-3 py-2">
+            <span className="shrink-0 text-xs font-medium text-muted-foreground">랭킹 기준</span>
+            <span className="shrink-0 text-xs text-primary">AI 감각 {blendWeight}%</span>
+            <Slider
+              value={[blendWeight]}
+              onValueChange={([v]) => changeBlendWeight(v)}
+              min={0}
+              max={100}
+              step={5}
+              className="flex-1"
+              aria-label="AI 감각 대 실제 성과 혼합 비율"
+            />
+            <span className="shrink-0 text-xs text-primary">실제 성과 {100 - blendWeight}%</span>
+          </div>
+        )}
+
         {ideaMode === "manual" && (
           <div className="mb-3 flex flex-col gap-3 rounded-lg bg-primary/5 p-3">
             <p className="text-xs text-muted-foreground">
@@ -320,13 +374,18 @@ export function HomeClient() {
           </p>
         ) : (
           <div className="flex flex-col gap-3">
-            {todayIdea.ideasJson.map((idea, i) => (
-              <div key={i} className="flex flex-col gap-1 rounded-lg border p-3 text-sm">
+            {rankedIdeas.map(({ idea, originalIndex, market, blended }) => (
+              <div key={originalIndex} className="flex flex-col gap-1 rounded-lg border p-3 text-sm">
                 <div className="flex items-start justify-between gap-2">
                   <p className="font-medium">{idea.title}</p>
-                  <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
-                    강추 {idea.recommendScore}
-                  </span>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
+                      강추 {blended}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">
+                      AI {idea.recommendScore} · 성과 {market ?? "—"}
+                    </span>
+                  </div>
                 </div>
                 <p className="text-primary">왜 좋은가: {idea.whyGood}</p>
                 <p className="text-muted-foreground">후킹: {idea.hook}</p>
@@ -350,16 +409,18 @@ export function HomeClient() {
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={savedIdeaIndexes.has(i)}
-                    onClick={() => saveIdea(idea, i)}
+                    disabled={savedIdeaIndexes.has(originalIndex)}
+                    onClick={() => saveIdea(idea, originalIndex)}
                   >
-                    {savedIdeaIndexes.has(i) ? "저장됨" : "🔖 저장"}
+                    {savedIdeaIndexes.has(originalIndex) ? "저장됨" : "🔖 저장"}
                   </Button>
                 </div>
               </div>
             ))}
             <p className="text-right text-xs text-muted-foreground">
-              # AI 생성. 자체 산출 — YouTube 데이터/추천 알고리즘과 무관.
+              {hasMarketScores
+                ? "# 혼합 점수 — AI 주관 점수 + 키워드 시장 성과(YouTube 실제 조회수 기반) 프록시."
+                : "# AI 생성 주관 점수. (재생성하면 실제 시장 성과 점수도 함께 계산됩니다.)"}
             </p>
           </div>
         )}
