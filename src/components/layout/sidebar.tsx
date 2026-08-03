@@ -13,6 +13,12 @@ import {
 } from "@/components/ui/accordion";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { isActivePath } from "@/lib/nav";
 import {
@@ -33,7 +39,7 @@ function NavLinkItem({
   collapsed: boolean;
 }) {
   const Icon = item.icon;
-  return (
+  const link = (
     <Link
       href={item.href}
       className={cn(
@@ -43,11 +49,20 @@ function NavLinkItem({
           : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
         collapsed && "justify-center px-0",
       )}
-      title={collapsed ? item.label : undefined}
     >
       <Icon className="size-4 shrink-0" />
       {!collapsed && <span className="truncate">{item.label}</span>}
     </Link>
+  );
+
+  // 접힘 상태에서는 라벨이 숨겨지므로, 참조 사이트(reelbox.ai)처럼 아이콘 우측에 다크 툴팁으로 메뉴명을 띄운다.
+  if (!collapsed) return link;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{link}</TooltipTrigger>
+      <TooltipContent side="right">{item.label}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -138,6 +153,7 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
 
   return (
+    <TooltipProvider delayDuration={200}>
     <aside
       className={cn(
         "flex h-screen shrink-0 flex-col border-r bg-card transition-[width] duration-200",
@@ -185,5 +201,6 @@ export function Sidebar() {
         </div>
       </div>
     </aside>
+    </TooltipProvider>
   );
 }
