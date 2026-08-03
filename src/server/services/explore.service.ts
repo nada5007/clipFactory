@@ -38,6 +38,13 @@ export async function getNichePopularVideos(niche: string) {
 
 const IDEA_MARKET_SAMPLE_SIZE = 25;
 const NICHE_TOP_PERFORMER_SAMPLE_SIZE = 25;
+const VPH_LOG_MAX = 4; // log10(10000): VPH(시간당 조회수) 1만이면 최상위(100점)로 본다.
+
+// 정렬된 오름차순 배열에서 p 분위값(0~1)을 반환한다.
+function percentileOfSorted(sortedAsc: number[], p: number): number {
+  if (sortedAsc.length === 0) return 0;
+  return sortedAsc[Math.min(sortedAsc.length - 1, Math.floor(sortedAsc.length * p))];
+}
 
 export type NicheTopPerformer = { niche: string; title: string; viewCount: number; vph: number };
 
@@ -63,17 +70,14 @@ export async function getNicheTopPerformers(
     .slice(0, count);
 }
 
-// PROJECT_SPEC.md §2.3 "홈 (2.1) — AI 주관 점수 + 실제 성과 점수 혼합 랭킹": "오늘의 AI 아이디어"의
-// 각 아이디어에 붙일 "실제 성과 점수(marketScore, 0~100)"를 산출한다. 아이디어 자체는 존재하지 않는
-// 기획이라 자체 조회수가 없으므로, 대표 키워드로 실제 영상을 검색해 그 주제 시장의 조회수 분포·최신성을
-// 프록시로 쓴다(computeKeywordMarketScore의 searchVolumeScore를 그대로 재사용). 비용은 아이디어당
-// 검색 1회로 제한한다. nicheContext가 있으면 쿼리에 앞세워 "니치 안에서의 성과"만 재도록 한다(후속 개선).
-export async function computeIdeaMarketScore(keywords: string[], nicheContext?: string): Promise<number> {
-  const niche = nicheContext?.trim();
-  const query = [niche, ...keywords.slice(0, niche ? 2 : 3)]
-    .filter((v): v is string => Boolean(v && v.trim()))
-    .join(" ")
-    .trim();
+// PROJECT_SPEC.md §2.3 "홈 (2.1) — marketScore 변별력 개선": "오늘의 AI 아이디어"의 각 아이디어에 붙일
+// "실제 성과 점수(marketScore, 0~100)"를 산출한다. 아이디어 자체는 존재하지 않는 기획이라 자체 조회수가
+// 없으므로, 아이디어의 "고유 키워드"로 실제 영상을 검색해 그 주제 영상들의 VPH(시간당 조회수) 상위값을
+// 프록시로 쓴다. 니치 접두어를 붙이지 않는 이유: 생성 단계에서 이미 니치 안으로 그라운딩되므로 니치를
+// 앞세우면 같은 니치 아이디어들이 동일한 결과를 받아 점수 변별력이 죽는다(이전 방식의 문제). 비용은
+// 아이디어당 검색 1회로 제한하고, VPH만 필요하므로 channels.list는 호출하지 않는다.
+export async function computeIdeaMarketScore(keywords: string[], now: Date = new Date()): Promise<number> {
+  const query = keywords.slice(0, 3).join(" ").trim();
   if (!query) return 0;
 
   const search = await searchVideos({ q: query, regionCode: "KR", maxResults: IDEA_MARKET_SAMPLE_SIZE });
@@ -81,20 +85,14 @@ export async function computeIdeaMarketScore(keywords: string[], nicheContext?: 
   if (videoIds.length === 0) return 0;
 
   const videos = await fetchVideosInBatches(videoIds);
-  const channelIds = Array.from(new Set(videos.map((v) => v.snippet.channelId)));
-  const subscriberByChannelId = await fetchChannelSubscribersInBatches(channelIds);
+  const vphsAsc = videos
+    .map((v) => computeVph(Number(v.statistics.viewCount ?? 0), v.snippet.publishedAt, now))
+    .sort((a, b) => a - b);
 
-  const result = computeKeywordMarketScore(
-    videos.map((v) => ({
-      viewCount: Number(v.statistics.viewCount ?? 0),
-      likeCount: Number(v.statistics.likeCount ?? 0),
-      publishedAt: v.snippet.publishedAt,
-      channelId: v.snippet.channelId,
-    })),
-    channelIds.map((id) => ({ id, subscriberCount: subscriberByChannelId.get(id) ?? 0 })),
-  );
-
-  return result.searchVolumeScore;
+  // 주제의 "잘 나갈 때" 성과(75퍼센타일 VPH)를 로그 정규화해 0~100으로. 상위값을 쓰는 이유는 검색 결과에
+  // 섞인 오래된 저성과 영상이 중앙값을 눌러 아이디어 간 차이를 지워버리는 것을 막기 위해서다.
+  const topVph = percentileOfSorted(vphsAsc, 0.75);
+  return Math.round(Math.min(1, Math.log10(topVph + 1) / VPH_LOG_MAX) * 100);
 }
 
 const KEYWORD_SEARCH_SAMPLE_SIZE = 50;

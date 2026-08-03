@@ -51,14 +51,15 @@ export async function generateTodayIdeas(request: GenerateIdeasRequest, now: Dat
     ideas = await generateDailyIdeas(request);
   }
 
-  // 각 아이디어에 실제 시장 성과 점수(marketScore)를 병렬로 붙인다. 아이디어의 소속 니치(idea.niche)를
-  // 검색 문맥으로 넘겨 "니치 안에서의 성과"만 재도록 한다. 한 아이디어의 검색이 실패해도 그 아이디어만
-  // 0으로 격리해 전체 생성이 죽지 않게 한다(YouTube 쿼터 초과·일시 오류 대비).
+  // 각 아이디어에 실제 시장 성과 점수(marketScore)를 병렬로 붙인다. 아이디어의 고유 키워드로 검색해
+  // 그 주제 영상들의 VPH를 프록시로 쓴다(니치 접두어는 붙이지 않는다 — 생성이 이미 니치 안이라 불필요하고
+  // 붙이면 변별력이 죽는다). 한 아이디어의 검색이 실패해도 그 아이디어만 0으로 격리해 전체 생성이 죽지
+  // 않게 한다(YouTube 쿼터 초과·일시 오류 대비).
   const scoredIdeas: ScoredDailyIdea[] = await Promise.all(
     ideas.map(async (idea) => {
       let marketScore = 0;
       try {
-        marketScore = await computeIdeaMarketScore(idea.keywords, idea.niche || undefined);
+        marketScore = await computeIdeaMarketScore(idea.keywords, now);
       } catch {
         marketScore = 0;
       }

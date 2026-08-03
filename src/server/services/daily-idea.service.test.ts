@@ -115,13 +115,13 @@ describe("daily-idea.service", () => {
     );
   });
 
-  it("marketScore 계산 시 아이디어의 소속 니치를 검색 문맥으로 넘긴다(니치 범위 성과)", async () => {
+  it("marketScore는 아이디어 고유 키워드로만 계산한다(니치 접두어 없이)", async () => {
     vi.mocked(listPopularVideos).mockResolvedValue({ items: [] });
     vi.mocked(generateDailyIdeas).mockResolvedValue(fakeIdeas("scoped", "이슈·정치 시사"));
 
     await generateTodayIdeas({ mode: "auto" }, NOW);
 
-    expect(computeIdeaMarketScore).toHaveBeenCalledWith(["a"], "이슈·정치 시사");
+    expect(computeIdeaMarketScore).toHaveBeenCalledWith(["a"], NOW);
   });
 
   it("한 니치의 상위 성과 수집이 실패해도 생성은 계속된다", async () => {

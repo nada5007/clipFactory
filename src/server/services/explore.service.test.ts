@@ -351,43 +351,43 @@ describe("computeIdeaMarketScore", () => {
     expect(score).toBe(0);
   });
 
-  it("대표 키워드로 검색해 실제 영상 통계 기반 0~100 성과 점수를 산출한다", async () => {
+  it("아이디어 고유 키워드로 검색해(니치 접두어 없이) VPH 기반 0~100 성과 점수를 산출한다", async () => {
+    const now = new Date("2026-08-03T00:00:00.000Z");
+    const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
     vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("v1"), searchItem("v2")] });
     vi.mocked(listVideos).mockResolvedValue({
       items: [
-        video({ id: "v1", statistics: { viewCount: "500000", likeCount: "8000" } }),
-        video({ id: "v2", statistics: { viewCount: "300000", likeCount: "5000" } }),
-      ],
-    });
-    vi.mocked(listChannels).mockResolvedValue({
-      items: [
-        {
-          id: "c1",
-          snippet: { title: "ch" },
-          statistics: { subscriberCount: "50000" },
-          contentDetails: { relatedPlaylists: { uploads: "u1" } },
-        },
+        video({ id: "v1", snippet: { title: "t", channelId: "c1", channelTitle: "ch", publishedAt: dayAgo }, statistics: { viewCount: "48000" } }),
+        video({ id: "v2", snippet: { title: "t", channelId: "c1", channelTitle: "ch", publishedAt: dayAgo }, statistics: { viewCount: "24000" } }),
       ],
     });
 
-    const score = await computeIdeaMarketScore(["게임중독", "실험", "챌린지"]);
+    const score = await computeIdeaMarketScore(["게임중독", "실험", "챌린지"], now);
 
+    // 니치 접두어 없이 키워드만으로 검색하고, channels.list는 호출하지 않는다(VPH만 필요).
     expect(searchVideos).toHaveBeenCalledWith(expect.objectContaining({ q: "게임중독 실험 챌린지", regionCode: "KR" }));
+    expect(listChannels).not.toHaveBeenCalled();
     expect(score).toBeGreaterThan(0);
     expect(score).toBeLessThanOrEqual(100);
   });
 
-  it("니치 문맥이 주어지면 검색 쿼리 앞에 니치를 붙여 니치 안에서의 성과를 잰다", async () => {
+  it("VPH가 높은 주제일수록 더 높은 점수를 준다", async () => {
+    const now = new Date("2026-08-03T00:00:00.000Z");
+    const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+
     vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("v1")] });
-    vi.mocked(listVideos).mockResolvedValue({ items: [video({ id: "v1" })] });
-    vi.mocked(listChannels).mockResolvedValue({
-      items: [{ id: "c1", snippet: { title: "ch" }, statistics: { subscriberCount: "5000" }, contentDetails: { relatedPlaylists: { uploads: "u1" } } }],
+    vi.mocked(listVideos).mockResolvedValue({
+      items: [video({ id: "v1", snippet: { title: "t", channelId: "c1", channelTitle: "ch", publishedAt: dayAgo }, statistics: { viewCount: "240000" } })],
     });
+    const hot = await computeIdeaMarketScore(["핫한주제"], now);
 
-    await computeIdeaMarketScore(["게임중독", "실험", "챌린지"], "이슈·정치 시사");
+    vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("v2")] });
+    vi.mocked(listVideos).mockResolvedValue({
+      items: [video({ id: "v2", snippet: { title: "t", channelId: "c1", channelTitle: "ch", publishedAt: dayAgo }, statistics: { viewCount: "240" } })],
+    });
+    const cold = await computeIdeaMarketScore(["잔잔한주제"], now);
 
-    // 니치 문맥이 있으면 니치 + 키워드 2개로 쿼리를 구성한다.
-    expect(searchVideos).toHaveBeenCalledWith(expect.objectContaining({ q: "이슈·정치 시사 게임중독 실험", regionCode: "KR" }));
+    expect(hot).toBeGreaterThan(cold);
   });
 });
 
