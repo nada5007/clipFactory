@@ -8,7 +8,7 @@ import {
 } from "@/lib/clients/youtube";
 import { resolveDateRange } from "@/lib/date-range";
 import { parseIso8601DurationSeconds } from "@/lib/duration";
-import { filterKoreanContent } from "@/lib/source-discovery";
+import { filterByLanguageScripts, filterKoreanContent } from "@/lib/source-discovery";
 import type { DateRangeFilter, LengthFilter, MinViewFilter, SortOption } from "@/lib/source-discovery-options";
 
 const SAMPLE_SIZE_PER_CALL = 50;
@@ -166,7 +166,10 @@ export async function discoverSources(input: DiscoverSourcesInput): Promise<Sour
       excludeKorean,
     );
 
-    const viewFiltered = koreanFiltered.filter((v) => Number(v.statistics.viewCount ?? 0) >= minViewCount);
+    // 선택한 언어의 문자권에 속하지 않는 영상 제외(영어권만 골랐는데 중국·일본 결과가 섞이는 문제 해결).
+    const languageFiltered = filterByLanguageScripts(koreanFiltered, languages);
+
+    const viewFiltered = languageFiltered.filter((v) => Number(v.statistics.viewCount ?? 0) >= minViewCount);
 
     if (viewFiltered.length === 0) {
       return { concept: input.concept, candidateCount: 0, videos: [] };

@@ -65,11 +65,12 @@ describe("discoverSources", () => {
     vi.mocked(searchVideos)
       .mockResolvedValueOnce({ items: [searchItem("v1"), searchItem("v2")] }) // region US
       .mockResolvedValueOnce({ items: [searchItem("v2"), searchItem("v3")] }) // region JP (v2 중복)
-      .mockResolvedValueOnce({ items: [searchItem("v4")] }); // language ja
+      .mockResolvedValueOnce({ items: [searchItem("v4")] }); // language en
     vi.mocked(listVideos).mockResolvedValue({
       items: ["v1", "v2", "v3", "v4"].map((id) => ({
         id,
-        snippet: { title: id, channelTitle: "ch", channelId: "c", publishedAt: "2026-01-01T00:00:00Z" },
+        // 제목을 라틴(영어)으로 둬 아래 languages: ["en"] 문자권 필터를 통과하게 한다.
+        snippet: { title: `Video ${id}`, channelTitle: "ch", channelId: "c", publishedAt: "2026-01-01T00:00:00Z" },
         statistics: { viewCount: "100" },
       })),
     });
@@ -78,7 +79,7 @@ describe("discoverSources", () => {
     const result = await discoverSources({
       concept: `다중지역-${Date.now()}`,
       regionCodes: ["US", "JP"],
-      languages: ["ja"],
+      languages: ["en"],
       excludeKorean: false,
     });
 

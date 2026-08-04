@@ -301,7 +301,13 @@ export function SourceDiscoveryClient() {
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
               {result.videos.map((video) => (
                 <div key={video.id} className="flex flex-col gap-2 overflow-hidden rounded-lg border bg-card">
-                  <div className="aspect-video bg-muted">
+                  <a
+                    href={`https://www.youtube.com/watch?v=${video.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="group relative block aspect-video bg-muted"
+                    title="유튜브에서 원본 영상 재생"
+                  >
                     {video.snippet.thumbnails?.medium?.url && (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
@@ -310,14 +316,25 @@ export function SourceDiscoveryClient() {
                         className="size-full object-cover"
                       />
                     )}
-                  </div>
+                    <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30">
+                      <span className="flex size-11 items-center justify-center rounded-full bg-black/60 text-lg text-white opacity-0 transition-opacity group-hover:opacity-100">
+                        ▶
+                      </span>
+                    </span>
+                  </a>
                   <div className="flex flex-col gap-1 px-2 pb-2">
                     <span className="w-fit rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
                       매치 {video.matchScore}점
                     </span>
-                    <p className="line-clamp-2 text-sm font-medium" title={video.snippet.title}>
+                    <a
+                      href={`https://www.youtube.com/watch?v=${video.id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="line-clamp-2 text-sm font-medium hover:text-primary hover:underline"
+                      title={video.snippet.title}
+                    >
                       {video.snippet.title}
-                    </p>
+                    </a>
                     {video.translatedTitle && (
                       <p className="line-clamp-2 text-xs text-primary" title={video.translatedTitle}>
                         {video.translatedTitle}
