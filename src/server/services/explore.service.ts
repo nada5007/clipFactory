@@ -1,4 +1,4 @@
-import { generateRelatedKeywords } from "@/lib/clients/anthropic";
+import { generateRelatedKeywords, translateSearchQuery } from "@/lib/clients/anthropic";
 import { listChannels, listPopularVideos, listVideos, searchVideos, type YoutubeVideo } from "@/lib/clients/youtube";
 import { cached } from "@/lib/cache";
 import { parseIso8601DurationSeconds } from "@/lib/duration";
@@ -22,6 +22,7 @@ import {
   computeRecencyScore,
   type OpportunityScore,
 } from "@/lib/opportunity-score";
+import { resolveRegionLanguage, resolveTranslateTargetLabel } from "@/lib/region-language";
 import { looksKorean } from "@/lib/source-discovery";
 import { extractTopTopics, type TopicCount } from "@/lib/tf-idf";
 
@@ -268,6 +269,7 @@ export type BrowseVideosInput = {
   minViewFilter?: MinViewFilter;
   channelUniqueOnly?: boolean;
   krOnly?: boolean; // "한국어만 (KR 전용)" 체크박스, 기본 ON
+  translateQuery?: boolean; // "검색어 현지어 번역" — 선택 국가가 KR이 아니면 검색어를 그 국가 언어로 번역해 검색
 };
 
 export type BrowseVideoItem = YoutubeVideo & {
@@ -292,12 +294,23 @@ async function fetchBrowseCandidates(input: BrowseVideosInput): Promise<{ items:
   const period = input.period ?? "24h";
   const categoryId = input.categoryId && input.categoryId !== "ALL" ? input.categoryId : undefined;
   const nicheEntry = input.niche ? getNicheKeywordEntry(input.niche) : undefined;
-  const explicitQuery = input.query?.trim();
+  let explicitQuery = input.query?.trim();
+  // 국가별 언어 힌트: search.list가 그 국가 언어권 결과를 우선하도록 relevanceLanguage를 함께 넘긴다.
+  const relevanceLanguage = resolveRegionLanguage(input.regionCode)?.relevanceLanguage;
 
   // API 매핑 규칙: 기간 24h + 쿼리 없음(니치 칩도 없음) = YouTube 공식 인기 차트. 그 외 = search.list.
   if (period === "24h" && !explicitQuery && !nicheEntry) {
     const result = await listPopularVideos({ regionCode: input.regionCode, categoryId, maxResults: CHART_FETCH_SIZE });
     return { items: result.items, usedChart: true };
+  }
+
+  // "검색어 현지어 번역"이 켜져 있고 선택 국가가 KR이 아니면, 검색어를 그 국가 언어로 번역해 검색한다
+  // (한글로 입력해도 선택 국가 유튜브가 검색되도록). 번역 실패 시 원문으로 폴백한다.
+  if (explicitQuery && input.translateQuery) {
+    const targetLabel = resolveTranslateTargetLabel(input.regionCode);
+    if (targetLabel) {
+      explicitQuery = await translateSearchQuery(explicitQuery, targetLabel).catch(() => explicitQuery);
+    }
   }
 
   const publishedAfter = new Date(Date.now() - periodToHours(period) * 60 * 60 * 1000).toISOString();
@@ -317,6 +330,7 @@ async function fetchBrowseCandidates(input: BrowseVideosInput): Promise<{ items:
           searchVideos({
             q: term,
             regionCode: input.regionCode,
+            relevanceLanguage,
             videoCategoryId: categoryId,
             order: "viewCount",
             publishedAfter,
@@ -326,6 +340,7 @@ async function fetchBrowseCandidates(input: BrowseVideosInput): Promise<{ items:
       : [
           searchVideos({
             regionCode: input.regionCode,
+            relevanceLanguage,
             videoCategoryId: categoryId,
             order: "viewCount",
             publishedAfter,
@@ -366,6 +381,7 @@ export async function browseVideos(input: BrowseVideosInput): Promise<BrowseVide
     minViewCount,
     channelUniqueOnly,
     (input.performanceTiers ?? []).slice().sort().join(","),
+    input.translateQuery ? "tq" : "",
   ].join(":");
 
   return cached(cacheKey, BROWSE_CACHE_TTL_SECONDS, async () => {

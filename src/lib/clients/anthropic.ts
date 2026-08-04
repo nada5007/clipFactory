@@ -288,6 +288,37 @@ export async function scoreSourceMatches(
   return batchResults.flat();
 }
 
+// PROJECT_SPEC.md §2.3 "탐색·분석 (2.4) — 검색어 번역 옵션": 사용자가 입력한 검색어를 선택 국가의 언어로
+// 번역해 그 나라 유튜브에서 검색되게 한다. 고유명사/브랜드는 원어를 유지하고, 검색에 적합한 자연스러운
+// 현지어 표현으로 옮긴다.
+const searchQueryTranslationSchema = z.object({
+  translated: z.string().describe("대상 언어로 번역된 검색어 (검색에 적합한 자연스러운 표현)"),
+});
+
+export async function translateSearchQuery(query: string, targetLanguageLabel: string): Promise<string> {
+  const trimmed = query.trim();
+  if (!trimmed) return trimmed;
+
+  const client = getClient();
+  const response = await client.messages.parse({
+    model: MODEL,
+    max_tokens: 1000,
+    thinking: { type: "adaptive" },
+    output_config: { effort: "low", format: zodOutputFormat(searchQueryTranslationSchema) },
+    system:
+      `너는 YouTube 검색어 번역가다. 주어진 검색어를 ${targetLanguageLabel}로, 그 언어권 사용자가 실제로 ` +
+      "검색할 법한 자연스러운 표현으로 번역한다. 브랜드·고유명사·인명은 원어(또는 그 언어권 통용 표기)를 " +
+      "유지한다. 설명 없이 번역된 검색어만 반환한다.",
+    messages: [{ role: "user", content: trimmed }],
+  });
+
+  if (!response.parsed_output?.translated?.trim()) {
+    // 번역 실패 시 원문으로 폴백해 검색 자체는 계속되게 한다.
+    return trimmed;
+  }
+  return response.parsed_output.translated.trim();
+}
+
 // UI_SPEC.md §7.1 "소스 발굴" "제목 자동 번역": 해외 영상 제목을 한국어로 일괄 번역한다.
 const translationSchema = z.object({
   translations: z.array(z.object({ index: z.number().int(), translated: z.string() })),

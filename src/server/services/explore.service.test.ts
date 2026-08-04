@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { generateRelatedKeywords } from "@/lib/clients/anthropic";
+import { generateRelatedKeywords, translateSearchQuery } from "@/lib/clients/anthropic";
 import { listChannels, listPopularVideos, listVideos, searchVideos } from "@/lib/clients/youtube";
 import { prisma } from "@/lib/prisma";
 import {
@@ -13,7 +13,7 @@ import {
   suggestRelatedKeywords,
 } from "@/server/services/explore.service";
 
-vi.mock("@/lib/clients/anthropic", () => ({ generateRelatedKeywords: vi.fn() }));
+vi.mock("@/lib/clients/anthropic", () => ({ generateRelatedKeywords: vi.fn(), translateSearchQuery: vi.fn() }));
 
 vi.mock("@/lib/clients/youtube", async () => {
   const actual = await vi.importActual<typeof import("@/lib/clients/youtube")>("@/lib/clients/youtube");
@@ -219,6 +219,36 @@ describe("browseVideos", () => {
 
     expect(result.usedChart).toBe(false);
     expect(listPopularVideos).not.toHaveBeenCalled();
+  });
+
+  it("국가 코드에 맞는 relevanceLanguage를 search.list에 함께 넘긴다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("rl1")] });
+    vi.mocked(listVideos).mockResolvedValue({ items: [video()] });
+
+    await browseVideos({ regionCode: "JP", period: "7d", query: "고양이", krOnly: false });
+
+    expect(searchVideos).toHaveBeenCalledWith(expect.objectContaining({ regionCode: "JP", relevanceLanguage: "ja" }));
+  });
+
+  it("검색어 번역 옵션이 켜지고 비KR 국가면 검색어를 그 국가 언어로 번역해 검색한다", async () => {
+    vi.mocked(translateSearchQuery).mockResolvedValue("猫");
+    vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("tq1")] });
+    vi.mocked(listVideos).mockResolvedValue({ items: [video()] });
+
+    await browseVideos({ regionCode: "JP", period: "7d", query: "고양이", translateQuery: true, krOnly: false });
+
+    expect(translateSearchQuery).toHaveBeenCalledWith("고양이", "일본어");
+    expect(searchVideos).toHaveBeenCalledWith(expect.objectContaining({ q: "猫", relevanceLanguage: "ja" }));
+  });
+
+  it("검색어 번역 옵션이 켜져도 KR 국가면 번역하지 않는다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("krq1")] });
+    vi.mocked(listVideos).mockResolvedValue({ items: [video()] });
+
+    await browseVideos({ regionCode: "KR", period: "7d", query: "고양이", translateQuery: true, krOnly: false });
+
+    expect(translateSearchQuery).not.toHaveBeenCalled();
+    expect(searchVideos).toHaveBeenCalledWith(expect.objectContaining({ q: "고양이" }));
   });
 
   it("krOnly가 true면 한글 비중이 낮은 제목/채널명은 제외한다", async () => {

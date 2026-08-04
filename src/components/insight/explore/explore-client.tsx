@@ -67,6 +67,7 @@ type Filters = {
   niche: string | null;
   krOnly: boolean;
   autoTranslate: boolean;
+  translateQuery: boolean;
   performanceTiers: Set<PerformanceTier>;
   minViewFilter: MinViewFilter;
   channelUniqueOnly: boolean;
@@ -81,6 +82,7 @@ const DEFAULT_FILTERS: Filters = {
   niche: null,
   krOnly: true,
   autoTranslate: false,
+  translateQuery: false,
   performanceTiers: new Set(),
   minViewFilter: "all",
   channelUniqueOnly: false,
@@ -113,6 +115,7 @@ export function ExploreClient() {
       period: f.period,
       videoForm: f.videoForm,
       krOnly: String(f.krOnly),
+      translateQuery: String(f.translateQuery),
       minView: f.minViewFilter,
       channelUniqueOnly: String(f.channelUniqueOnly),
     });
@@ -301,10 +304,28 @@ export function ExploreClient() {
                 />
                 외국 영상 자동 번역
               </label>
+              <label className="flex items-center gap-2">
+                <Checkbox
+                  checked={filters.translateQuery}
+                  disabled={filters.region === "KR"}
+                  onCheckedChange={(v) => setFilters((p) => ({ ...p, translateQuery: Boolean(v) }))}
+                />
+                검색어 현지어 번역
+              </label>
             </div>
+            <p className="text-xs text-muted-foreground">
+              한국어만: 한국 검색 시 외국어 영상 제외 · 외국 영상 자동 번역: 결과 제목을 한국어로 변환 · 검색어 현지어
+              번역: 입력한 한글 검색어를 선택 국가 언어로 번역해 검색(KR 제외)
+            </p>
 
             <div className="flex flex-wrap gap-3">
-              <Select value={filters.region} onValueChange={(v) => setFilters((p) => ({ ...p, region: v }))}>
+              <Select
+                value={filters.region}
+                onValueChange={(v) =>
+                  // 비KR 국가를 고르면 '한국어만'을 자동 해제해 그 국가 결과가 필터로 잘리지 않게 한다.
+                  setFilters((p) => ({ ...p, region: v, krOnly: v === "KR" ? p.krOnly : false }))
+                }
+              >
                 <SelectTrigger className="w-36">
                   <SelectValue />
                 </SelectTrigger>

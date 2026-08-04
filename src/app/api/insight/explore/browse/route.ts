@@ -24,6 +24,7 @@ export async function GET(request: Request) {
     minViewFilter: (params.get("minView") as BrowseVideosInput["minViewFilter"]) ?? undefined,
     channelUniqueOnly: params.get("channelUniqueOnly") === "true",
     krOnly: params.get("krOnly") === null ? undefined : params.get("krOnly") !== "false",
+    translateQuery: params.get("translateQuery") === "true",
   };
 
   try {
