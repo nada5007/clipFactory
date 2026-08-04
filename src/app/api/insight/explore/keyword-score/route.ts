@@ -1,10 +1,20 @@
 import { NextResponse } from "next/server";
 
-import { analyzeKeywordMarketability, analyzeKeywordsBulk } from "@/server/services/explore.service";
+import type { ExplorePeriod, VideoForm } from "@/lib/explore-options";
+import {
+  analyzeKeywordMarketability,
+  analyzeKeywordsBulk,
+  type AnalyzeKeywordOptions,
+} from "@/server/services/explore.service";
 
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
-  const region = params.get("region") ?? undefined;
+  const options: AnalyzeKeywordOptions = {
+    regionCode: params.get("region") ?? undefined,
+    videoForm: (params.get("videoForm") as VideoForm | null) ?? undefined,
+    period: (params.get("period") as ExplorePeriod | null) ?? undefined,
+    translateQuery: params.get("translateQuery") === "true",
+  };
   const keywordsParam = params.get("keywords");
 
   if (keywordsParam) {
@@ -13,7 +23,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "키워드를 입력하세요." }, { status: 400 });
     }
     try {
-      const result = await analyzeKeywordsBulk(keywords, region);
+      const result = await analyzeKeywordsBulk(keywords, options);
       return NextResponse.json({ results: result });
     } catch (error) {
       return NextResponse.json(
@@ -29,7 +39,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await analyzeKeywordMarketability(keyword, region);
+    const result = await analyzeKeywordMarketability(keyword, options);
     return NextResponse.json(result);
   } catch (error) {
     return NextResponse.json(

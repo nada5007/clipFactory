@@ -4,16 +4,23 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { VideoDetailModal } from "@/components/insight/video-analysis/video-detail-modal";
 import {
   MIN_VIEW_OPTIONS,
   PERFORMANCE_TIER_LABELS,
   PERFORMANCE_TIER_ORDER,
+  PERIOD_OPTIONS,
+  REGION_OPTIONS,
+  VIDEO_FORM_OPTIONS,
   minViewFilterToCount,
+  type ExplorePeriod,
   type MinViewFilter,
   type PerformanceTier,
+  type VideoForm,
 } from "@/lib/explore-options";
 import { computeOpportunityScore, type OpportunityWeights } from "@/lib/opportunity-score";
 import { formatRevenueLabel, formatVphLabel } from "@/lib/performance-tier";
@@ -111,6 +118,19 @@ export function KeywordScorePanel({ seedKeyword }: { seedKeyword?: string | null
   const [relatedKeywords, setRelatedKeywords] = useState<string[] | null>(null);
   const [relatedLoading, setRelatedLoading] = useState(false);
 
+  // 참조 사이트처럼 분석 모드에도 국가/영상형태/기간/번역 옵션을 제공한다(탐색 모드와 동일 개념).
+  const [region, setRegion] = useState("KR");
+  const [videoForm, setVideoForm] = useState<VideoForm>("all");
+  const [period, setPeriod] = useState<ExplorePeriod>("30d");
+  const [translateQuery, setTranslateQuery] = useState(false);
+
+  const analyzeParams = () => ({
+    region,
+    videoForm,
+    period,
+    translateQuery: String(translateQuery),
+  });
+
   const [weights, setWeights] = useState<OpportunityWeights>(DEFAULT_UI_WEIGHTS);
   const [showWeightAdjust, setShowWeightAdjust] = useState(false);
   const [selectedTiers, setSelectedTiers] = useState<Set<PerformanceTier>>(new Set());
@@ -132,7 +152,7 @@ export function KeywordScorePanel({ seedKeyword }: { seedKeyword?: string | null
     setMinViewFilter("all");
     setWeights(DEFAULT_UI_WEIGHTS);
 
-    fetch(`/api/insight/explore/keyword-score?${new URLSearchParams({ keyword: trimmed }).toString()}`)
+    fetch(`/api/insight/explore/keyword-score?${new URLSearchParams({ keyword: trimmed, ...analyzeParams() }).toString()}`)
       .then(async (res) => {
         const body = await res.json();
         if (!res.ok) throw new Error(body.error ?? "키워드 시장성을 분석하지 못했습니다.");
@@ -164,7 +184,9 @@ export function KeywordScorePanel({ seedKeyword }: { seedKeyword?: string | null
     setBulkLoading(true);
     setBulkError(null);
 
-    fetch(`/api/insight/explore/keyword-score?${new URLSearchParams({ keywords: keywords.join(",") }).toString()}`)
+    fetch(
+      `/api/insight/explore/keyword-score?${new URLSearchParams({ keywords: keywords.join(","), ...analyzeParams() }).toString()}`,
+    )
       .then(async (res) => {
         const body = await res.json();
         if (!res.ok) throw new Error(body.error ?? "키워드 시장성을 분석하지 못했습니다.");
@@ -246,6 +268,57 @@ export function KeywordScorePanel({ seedKeyword }: { seedKeyword?: string | null
           >
             복수(최대 10개)
           </button>
+        </div>
+      </div>
+
+      {/* 참조 사이트처럼 국가/영상형태/기간/검색어 번역 옵션. 국가 언어 힌트·번역이 분석 표본에 반영된다. */}
+      <div className="flex flex-col gap-2">
+        <label className="flex w-fit items-center gap-2 text-sm">
+          <Checkbox
+            checked={translateQuery}
+            disabled={region === "KR"}
+            onCheckedChange={(v) => setTranslateQuery(Boolean(v))}
+          />
+          검색어 현지어 번역
+          <span className="text-xs text-muted-foreground">(입력한 한글 검색어를 선택 국가 언어로 번역해 분석 · KR 제외)</span>
+        </label>
+        <div className="flex flex-wrap gap-3">
+          <Select value={region} onValueChange={(v) => setRegion(v)}>
+            <SelectTrigger className="w-36">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {REGION_OPTIONS.map((r) => (
+                <SelectItem key={r.value} value={r.value}>
+                  {r.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={videoForm} onValueChange={(v) => setVideoForm(v as VideoForm)}>
+            <SelectTrigger className="w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {VIDEO_FORM_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={period} onValueChange={(v) => setPeriod(v as ExplorePeriod)}>
+            <SelectTrigger className="w-36">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PERIOD_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 

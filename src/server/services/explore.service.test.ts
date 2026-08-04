@@ -154,6 +154,45 @@ describe("analyzeKeywordMarketability", () => {
     expect(result.relatedTopics.length).toBeGreaterThan(0);
     expect(result.opportunityScore.newChannelShare).toBe(100); // 구독자 5000 < 10만
   });
+
+  it("국가 옵션에 맞는 relevanceLanguage와 기간(publishedAfter)을 search.list에 넘긴다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [] });
+
+    await analyzeKeywordMarketability("테스트", { regionCode: "JP", period: "7d" });
+
+    expect(searchVideos).toHaveBeenCalledWith(
+      expect.objectContaining({ regionCode: "JP", relevanceLanguage: "ja", publishedAfter: expect.any(String) }),
+    );
+  });
+
+  it("검색어 번역 옵션이 켜지고 비KR이면 키워드를 번역해 검색하되 표시용 keyword는 원문을 유지한다", async () => {
+    vi.mocked(translateSearchQuery).mockResolvedValue("cat");
+    vi.mocked(searchVideos).mockResolvedValue({ items: [] });
+
+    const result = await analyzeKeywordMarketability("고양이", { regionCode: "US", translateQuery: true });
+
+    expect(translateSearchQuery).toHaveBeenCalledWith("고양이", "영어");
+    expect(searchVideos).toHaveBeenCalledWith(expect.objectContaining({ q: "cat" }));
+    expect(result.keyword).toBe("고양이");
+  });
+
+  it("영상형태=쇼츠면 180초 초과 영상을 표본에서 제외한다", async () => {
+    vi.mocked(searchVideos).mockResolvedValue({ items: [searchItem("s1"), searchItem("l1")] });
+    vi.mocked(listVideos).mockResolvedValue({
+      items: [
+        video({ id: "s1", snippet: { title: "쇼츠", channelId: "c1", channelTitle: "ch", publishedAt: new Date().toISOString() }, statistics: { viewCount: "1000" }, contentDetails: { duration: "PT30S" } }),
+        video({ id: "l1", snippet: { title: "롱폼", channelId: "c1", channelTitle: "ch", publishedAt: new Date().toISOString() }, statistics: { viewCount: "1000" }, contentDetails: { duration: "PT10M" } }),
+      ],
+    });
+    vi.mocked(listChannels).mockResolvedValue({
+      items: [{ id: "c1", snippet: { title: "ch" }, statistics: { subscriberCount: "5000" }, contentDetails: { relatedPlaylists: { uploads: "u1" } } }],
+    });
+
+    const result = await analyzeKeywordMarketability("테스트", { videoForm: "short" });
+
+    expect(result.stats.videoCount).toBe(1);
+    expect(result.topVideos.map((v) => v.videoId)).toEqual(["s1"]);
+  });
 });
 
 describe("getNichePopularVideos", () => {

@@ -157,29 +157,71 @@ export function suggestRelatedKeywords(keyword: string): Promise<string[]> {
   return generateRelatedKeywords(keyword, AUTO_EXPAND_RELATED_COUNT);
 }
 
+// PROJECT_SPEC.md §2.3 "탐색·분석 (2.4) — 분석 모드 옵션 패리티": 분석 모드도 탐색 모드처럼 국가(언어 힌트)·
+// 영상형태·기간·검색어 번역 옵션을 받는다.
+export type AnalyzeKeywordOptions = {
+  regionCode?: string;
+  videoForm?: VideoForm; // "all" | "short" | "long"
+  period?: ExplorePeriod; // 지정 시 publishedAfter 필터
+  translateQuery?: boolean; // 비KR 국가면 검색어를 그 국가 언어로 번역해 검색
+};
+
+function emptyKeywordAnalysis(keyword: string): KeywordMarketAnalysis {
+  return {
+    ...computeKeywordMarketScore([], []),
+    keyword,
+    videos: [],
+    topVideos: [],
+    opportunityScore: computeOpportunityScore({ popularity: 0, entryDifficulty: 0, newChannelShare: 0, recency: 0 }),
+    relatedTopics: [],
+  };
+}
+
 // PROJECT_SPEC.md §2.3 "키워드 시장성 (2.4)": 검색 결과 상위 50개의 조회수/최신성/참여율/경쟁 채널 구독자 분포 종합.
 export async function analyzeKeywordMarketability(
   keyword: string,
-  regionCode?: string,
+  options: AnalyzeKeywordOptions = {},
 ): Promise<KeywordMarketAnalysis> {
-  const terms = await expandKeywordTerms(keyword);
+  const { regionCode, videoForm = "all", period, translateQuery } = options;
+  const relevanceLanguage = resolveRegionLanguage(regionCode)?.relevanceLanguage;
+
+  // 검색어 번역 옵션: 비KR 국가면 키워드를 그 국가 언어로 번역해 검색한다(표시용 keyword는 원문 유지).
+  let effectiveKeyword = keyword;
+  if (translateQuery) {
+    const targetLabel = resolveTranslateTargetLabel(regionCode);
+    if (targetLabel) effectiveKeyword = await translateSearchQuery(keyword, targetLabel).catch(() => keyword);
+  }
+
+  const publishedAfter = period
+    ? new Date(Date.now() - periodToHours(period) * 60 * 60 * 1000).toISOString()
+    : undefined;
+
+  const terms = await expandKeywordTerms(effectiveKeyword);
   const searchResults = await Promise.all(
-    terms.map((term) => searchVideos({ q: term, regionCode, maxResults: KEYWORD_SEARCH_SAMPLE_SIZE })),
+    terms.map((term) =>
+      searchVideos({ q: term, regionCode, relevanceLanguage, publishedAfter, maxResults: KEYWORD_SEARCH_SAMPLE_SIZE }),
+    ),
   );
   const videoIds = Array.from(new Set(searchResults.flatMap((r) => r.items.map((item) => item.id.videoId))));
 
   if (videoIds.length === 0) {
-    return {
-      ...computeKeywordMarketScore([], []),
-      keyword,
-      videos: [],
-      topVideos: [],
-      opportunityScore: computeOpportunityScore({ popularity: 0, entryDifficulty: 0, newChannelShare: 0, recency: 0 }),
-      relatedTopics: [],
-    };
+    return emptyKeywordAnalysis(keyword);
   }
 
-  const videos = await fetchVideosInBatches(videoIds);
+  const fetchedVideos = await fetchVideosInBatches(videoIds);
+  // 영상형태(쇼츠/롱폼) 필터: 길이 시그널이 없으면 롱폼으로 간주(탐색 모드와 동일 규칙).
+  const videos =
+    videoForm === "all"
+      ? fetchedVideos
+      : fetchedVideos.filter((v) => {
+          const duration = v.contentDetails?.duration;
+          if (!duration) return videoForm === "long";
+          return classifyVideoForm(parseIso8601DurationSeconds(duration)) === videoForm;
+        });
+
+  if (videos.length === 0) {
+    return emptyKeywordAnalysis(keyword);
+  }
   const channelIds = Array.from(new Set(videos.map((v) => v.snippet.channelId)));
   const subscriberByChannelId = await fetchChannelSubscribersInBatches(channelIds);
 
@@ -238,10 +280,10 @@ export type BulkKeywordAnalysis = Omit<KeywordMarketAnalysis, "videos" | "topVid
 
 export async function analyzeKeywordsBulk(
   keywords: string[],
-  regionCode?: string,
+  options: AnalyzeKeywordOptions = {},
 ): Promise<BulkKeywordAnalysis[]> {
   const trimmed = keywords.map((k) => k.trim()).filter(Boolean).slice(0, MAX_BULK_KEYWORDS);
-  const results = await Promise.all(trimmed.map((k) => analyzeKeywordMarketability(k, regionCode)));
+  const results = await Promise.all(trimmed.map((k) => analyzeKeywordMarketability(k, options)));
   return results.map(
     ({ score, breakdown, stats, searchVolumeScore, competitionRatio, recommendScore, opportunityScore, keyword }) => ({
       score,
