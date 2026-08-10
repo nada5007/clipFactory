@@ -10,14 +10,38 @@ const numberFormat = new Intl.NumberFormat("ko-KR");
 const DAY_LABELS = ["일", "월", "화", "수", "목", "금", "토"];
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 
-function VideoThumb({ thumbnailUrl, title }: { thumbnailUrl?: string; title: string }) {
-  return (
-    <div className="aspect-video w-full overflow-hidden rounded bg-muted">
+function youtubeWatchUrl(videoId: string) {
+  return `https://www.youtube.com/watch?v=${videoId}`;
+}
+
+function VideoThumb({ thumbnailUrl, title, videoId }: { thumbnailUrl?: string; title: string; videoId?: string }) {
+  const inner = (
+    <div className="relative aspect-video w-full overflow-hidden rounded bg-muted">
       {thumbnailUrl && (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={thumbnailUrl} alt={title} className="size-full object-cover" />
       )}
+      {videoId && (
+        <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30">
+          <span className="flex size-9 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100">
+            ▶
+          </span>
+        </span>
+      )}
     </div>
+  );
+
+  if (!videoId) return inner;
+  return (
+    <a
+      href={youtubeWatchUrl(videoId)}
+      target="_blank"
+      rel="noreferrer"
+      className="group block"
+      title="유튜브에서 원본 영상 재생"
+    >
+      {inner}
+    </a>
   );
 }
 
@@ -158,11 +182,17 @@ export function ChannelAnalysisClient() {
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
               {report.analysis.topVideos.map((video) => (
                 <div key={video.videoId} className="flex flex-col gap-1 overflow-hidden rounded-lg border bg-card">
-                  <VideoThumb thumbnailUrl={video.thumbnailUrl} title={video.title} />
+                  <VideoThumb thumbnailUrl={video.thumbnailUrl} title={video.title} videoId={video.videoId} />
                   <div className="flex flex-col gap-0.5 px-2 pb-2">
-                    <p className="line-clamp-2 text-xs font-medium" title={video.title}>
+                    <a
+                      href={youtubeWatchUrl(video.videoId)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="line-clamp-2 text-xs font-medium hover:text-primary hover:underline"
+                      title={video.title}
+                    >
                       {video.title}
-                    </p>
+                    </a>
                     <p className="text-[11px] text-muted-foreground">
                       조회수 {numberFormat.format(video.viewCount)}회
                     </p>
@@ -184,14 +214,21 @@ export function ChannelAnalysisClient() {
             ) : (
               <div className="flex flex-col divide-y rounded-lg border">
                 {report.analysis.surgedVideos.map((video) => (
-                  <div key={video.videoId} className="flex items-center justify-between gap-3 p-2 text-sm">
-                    <span className="line-clamp-1" title={video.title}>
+                  <a
+                    key={video.videoId}
+                    href={youtubeWatchUrl(video.videoId)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center justify-between gap-3 p-2 text-sm hover:bg-muted"
+                    title="유튜브에서 원본 영상 재생"
+                  >
+                    <span className="line-clamp-1 hover:text-primary" title={video.title}>
                       {video.title}
                     </span>
                     <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
                       {video.ratio.toFixed(1)}배 · {numberFormat.format(video.viewCount)}회
                     </span>
-                  </div>
+                  </a>
                 ))}
               </div>
             )}
@@ -210,7 +247,7 @@ export function ChannelAnalysisClient() {
             <h3 className="mb-2 text-sm font-semibold">썸네일 그리드 (조회수 순)</h3>
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
               {report.analysis.videos.map((video) => (
-                <VideoThumb key={video.videoId} thumbnailUrl={video.thumbnailUrl} title={video.title} />
+                <VideoThumb key={video.videoId} thumbnailUrl={video.thumbnailUrl} title={video.title} videoId={video.videoId} />
               ))}
             </div>
           </div>
