@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ArrowLeft, Camera, FileText, Film, Image as ImageIcon, Mic, Upload } from "lucide-react";
+import { ArrowLeft, Camera, FileText, Film, Image as ImageIcon, Mic, Scissors, Upload } from "lucide-react";
 
+import { HighlightPanel } from "@/components/projects/detail/highlight-panel";
 import { ImagesPanel } from "@/components/projects/detail/images-panel";
 import { ScriptPanel } from "@/components/projects/detail/script-panel";
 import { ThumbnailPanel } from "@/components/projects/detail/thumbnail-panel";
@@ -13,7 +14,7 @@ import { VideoPanel } from "@/components/projects/detail/video-panel";
 import { cn } from "@/lib/utils";
 import type { SerializedProject } from "@/types/project";
 
-type TabKey = "script" | "images" | "tts" | "video" | "thumbnail" | "upload";
+type TabKey = "highlight" | "script" | "images" | "tts" | "video" | "thumbnail" | "upload";
 
 // 탭별 완료 여부 점(dot) 표시용 근사치. 하위 리소스(이미지/오디오/썸네일 등) 존재 여부를 직접
 // 조회하지 않고 Project.progress 임계값으로 근사한다 (PROJECT_SPEC.md §1.3 "탭 바 도입" 범위 내 단순화).
@@ -26,14 +27,24 @@ const TAB_ITEMS: { key: TabKey; label: string; icon: typeof FileText; progressTh
   { key: "upload", label: "업로드", icon: Upload, progressThreshold: 100 },
 ];
 
+// 채널 분석에서 만든 프로젝트(원본 영상 소스가 있는)만 "하이라이트" 탭을 노출한다.
+const HIGHLIGHT_TAB: (typeof TAB_ITEMS)[number] = { key: "highlight", label: "하이라이트", icon: Scissors, progressThreshold: 0 };
+
 export function ProjectDetailClient({ projectId }: { projectId: string }) {
   const [project, setProject] = useState<SerializedProject | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("script");
 
+  const hasSourceVideo = Boolean((project?.settings as { sourceVideo?: unknown } | null)?.sourceVideo);
+  const tabItems = hasSourceVideo ? [HIGHLIGHT_TAB, ...TAB_ITEMS] : TAB_ITEMS;
+
   useEffect(() => {
     fetch(`/api/projects/${projectId}`)
       .then((res) => (res.ok ? res.json() : null))
-      .then(setProject);
+      .then((p: SerializedProject | null) => {
+        setProject(p);
+        // 채널 분석 소스가 있는 프로젝트는 하이라이트 편집이 첫 단계이므로 그 탭을 기본으로 연다.
+        if (p && (p.settings as { sourceVideo?: unknown } | null)?.sourceVideo) setActiveTab("highlight");
+      });
   }, [projectId]);
 
   return (
@@ -52,7 +63,7 @@ export function ProjectDetailClient({ projectId }: { projectId: string }) {
       </div>
 
       <div className="flex items-center gap-1 border-b">
-        {TAB_ITEMS.map((tab) => {
+        {tabItems.map((tab) => {
           const Icon = tab.icon;
           const active = activeTab === tab.key;
           const done = (project?.progress ?? 0) >= tab.progressThreshold;
@@ -78,6 +89,7 @@ export function ProjectDetailClient({ projectId }: { projectId: string }) {
         })}
       </div>
 
+      {activeTab === "highlight" && <HighlightPanel projectId={projectId} />}
       {activeTab === "script" && <ScriptPanel projectId={projectId} />}
       {activeTab === "images" && project && <ImagesPanel projectId={projectId} videoFormat={project.videoFormat} />}
       {activeTab === "tts" && project && <TtsPanel projectId={projectId} channelId={project.channelId} />}
