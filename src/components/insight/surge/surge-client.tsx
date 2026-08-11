@@ -3,6 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -45,23 +46,24 @@ const MODE_DEFAULT_PERIOD: Record<SurgeMode, SurgePeriod> = {
 export function SurgeClient() {
   const searchParams = useSearchParams();
 
-  const [mode, setMode] = useState<SurgeMode>("keyword");
-  const [region, setRegion] = useState("KR");
-  const [category, setCategory] = useState("ALL");
-  const [seedKeyword, setSeedKeyword] = useState("");
-  const [keyword, setKeyword] = useState("");
-  const [channelId, setChannelId] = useState("");
-  const [threshold, setThreshold] = useState(SURGE_DEFAULT_THRESHOLD);
-  const [videoForm, setVideoForm] = useState<VideoForm>("all");
-  const [period, setPeriod] = useState<SurgePeriod>(MODE_DEFAULT_PERIOD.keyword);
-  const [hiddenGemEnabled, setHiddenGemEnabled] = useState(false);
-  const [subscriberCap, setSubscriberCap] = useState(SUBSCRIBER_CAP_DEFAULT);
+  // 다른 페이지로 이동했다가 돌아와도 조건·결과가 유지되도록 보관한다.
+  const [mode, setMode] = usePersistedState<SurgeMode>("insight:surge:mode", "keyword");
+  const [region, setRegion] = usePersistedState("insight:surge:region", "KR");
+  const [category, setCategory] = usePersistedState("insight:surge:category", "ALL");
+  const [seedKeyword, setSeedKeyword] = usePersistedState("insight:surge:seedKeyword", "");
+  const [keyword, setKeyword] = usePersistedState("insight:surge:keyword", "");
+  const [channelId, setChannelId] = usePersistedState("insight:surge:channelId", "");
+  const [threshold, setThreshold] = usePersistedState("insight:surge:threshold", SURGE_DEFAULT_THRESHOLD);
+  const [videoForm, setVideoForm] = usePersistedState<VideoForm>("insight:surge:videoForm", "all");
+  const [period, setPeriod] = usePersistedState<SurgePeriod>("insight:surge:period", MODE_DEFAULT_PERIOD.keyword);
+  const [hiddenGemEnabled, setHiddenGemEnabled] = usePersistedState("insight:surge:hiddenGem", false);
+  const [subscriberCap, setSubscriberCap] = usePersistedState("insight:surge:subscriberCap", SUBSCRIBER_CAP_DEFAULT);
 
-  const [result, setResult] = useState<SurgeSearchResult | null>(null);
+  const [result, setResult] = usePersistedState<SurgeSearchResult | null>("insight:surge:result", null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [patternAnalysis, setPatternAnalysis] = useState<SurgePatternAnalysis | null>(null);
+  const [patternAnalysis, setPatternAnalysis] = usePersistedState<SurgePatternAnalysis | null>("insight:surge:pattern", null);
   const [patternLoading, setPatternLoading] = useState(false);
   const [patternError, setPatternError] = useState<string | null>(null);
 

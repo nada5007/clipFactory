@@ -16,6 +16,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { usePersistedState } from "@/lib/use-persisted-state";
 import type { ScannedVideoWithRatio } from "@/lib/channel-scan";
 import type { ChannelScanReport } from "@/server/services/channel-analysis.service";
 
@@ -94,8 +95,8 @@ function Heatmap({ heatmap }: { heatmap: ChannelScanReport["analysis"]["heatmap"
 }
 
 export function ChannelAnalysisClient() {
-  const [input, setInput] = useState("");
-  const [report, setReport] = useState<ChannelScanReport | null>(null);
+  const [input, setInput] = usePersistedState("insight:channel:input", "");
+  const [report, setReport] = usePersistedState<ChannelScanReport | null>("insight:channel:report", null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [channelSaved, setChannelSaved] = useState(false);

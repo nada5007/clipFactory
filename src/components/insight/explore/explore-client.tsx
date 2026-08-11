@@ -3,6 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -90,18 +91,19 @@ const DEFAULT_FILTERS: Filters = {
 
 export function ExploreClient() {
   const searchParams = useSearchParams();
-  const [mode, setMode] = useState<"browse" | "analyze">("browse");
-  const [analyzeSeedKeyword, setAnalyzeSeedKeyword] = useState<string | null>(null);
+  // 다른 페이지로 이동했다가 돌아와도 검색 결과·필터가 유지되도록 usePersistedState로 보관한다.
+  const [mode, setMode] = usePersistedState<"browse" | "analyze">("insight:explore:mode", "browse");
+  const [analyzeSeedKeyword, setAnalyzeSeedKeyword] = usePersistedState<string | null>("insight:explore:seed", null);
 
-  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
-  const [result, setResult] = useState<BrowseVideosResult | null>(null);
+  const [filters, setFilters] = usePersistedState<Filters>("insight:explore:filters", DEFAULT_FILTERS);
+  const [result, setResult] = usePersistedState<BrowseVideosResult | null>("insight:explore:result", null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
   const [selectedModalTab, setSelectedModalTab] = useState<"overview" | "captions" | "similar" | "script-pattern">("overview");
   const [savedVideoIds, setSavedVideoIds] = useState<Set<string>>(new Set());
-  const [translatedTitles, setTranslatedTitles] = useState<Record<string, string>>({});
+  const [translatedTitles, setTranslatedTitles] = usePersistedState<Record<string, string>>("insight:explore:translated", {});
   const [translatingIds, setTranslatingIds] = useState<Set<string>>(new Set());
 
   const fetchVideos = useCallback((overrides?: Partial<Filters>) => {
@@ -168,6 +170,12 @@ export function ExploreClient() {
     if (nicheParam) {
       setFilters((prev) => ({ ...prev, niche: nicheParam }));
       fetchVideos({ niche: nicheParam });
+      return;
+    }
+
+    // 이전 방문에서 복원된 결과가 있으면 재조회하지 않고 그대로 보여준다(스피너 해제).
+    if (result) {
+      setLoading(false);
       return;
     }
 

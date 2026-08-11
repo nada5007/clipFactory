@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { VideoDetailModal } from "@/components/insight/video-analysis/video-detail-modal";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -55,18 +56,19 @@ function Chip({
 }
 
 export function SourceDiscoveryClient() {
-  const [concept, setConcept] = useState("");
+  // 다른 페이지로 이동했다가 돌아와도 컨셉·옵션·결과가 유지되도록 보관한다.
+  const [concept, setConcept] = usePersistedState("insight:source:concept", "");
   const [optionsOpen, setOptionsOpen] = useState(false);
-  const [translateTitlesOn, setTranslateTitlesOn] = useState(false);
-  const [selectedRegions, setSelectedRegions] = useState<Set<string>>(new Set());
-  const [selectedLanguages, setSelectedLanguages] = useState<Set<string>>(new Set());
-  const [length, setLength] = useState<LengthFilter>("ALL");
-  const [dateRange, setDateRange] = useState<DateRangeFilter>("ALL");
-  const [minViewCount, setMinViewCount] = useState<MinViewFilter>(0);
-  const [sort, setSort] = useState<SortOption>("MATCH");
-  const [excludeKorean, setExcludeKorean] = useState(true);
+  const [translateTitlesOn, setTranslateTitlesOn] = usePersistedState("insight:source:translateTitles", false);
+  const [selectedRegions, setSelectedRegions] = usePersistedState<Set<string>>("insight:source:regions", new Set());
+  const [selectedLanguages, setSelectedLanguages] = usePersistedState<Set<string>>("insight:source:languages", new Set());
+  const [length, setLength] = usePersistedState<LengthFilter>("insight:source:length", "ALL");
+  const [dateRange, setDateRange] = usePersistedState<DateRangeFilter>("insight:source:dateRange", "ALL");
+  const [minViewCount, setMinViewCount] = usePersistedState<MinViewFilter>("insight:source:minView", 0);
+  const [sort, setSort] = usePersistedState<SortOption>("insight:source:sort", "MATCH");
+  const [excludeKorean, setExcludeKorean] = usePersistedState("insight:source:excludeKorean", true);
 
-  const [result, setResult] = useState<SourceDiscoveryResult | null>(null);
+  const [result, setResult] = usePersistedState<SourceDiscoveryResult | null>("insight:source:result", null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
@@ -11,9 +12,9 @@ const numberFormat = new Intl.NumberFormat("ko-KR");
 const percentFormat = new Intl.NumberFormat("ko-KR", { style: "percent", maximumFractionDigits: 0 });
 
 export function VideoSeoClient() {
-  const [url, setUrl] = useState("");
-  const [keyword, setKeyword] = useState("");
-  const [report, setReport] = useState<VideoSeoReport | null>(null);
+  const [url, setUrl] = usePersistedState("insight:videoSeo:url", "");
+  const [keyword, setKeyword] = usePersistedState("insight:videoSeo:keyword", "");
+  const [report, setReport] = usePersistedState<VideoSeoReport | null>("insight:videoSeo:report", null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

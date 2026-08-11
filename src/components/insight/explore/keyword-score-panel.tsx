@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -104,14 +105,17 @@ function TopVideoRow({
 }
 
 export function KeywordScorePanel({ seedKeyword }: { seedKeyword?: string | null }) {
-  const [keyword, setKeyword] = useState("");
-  const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  // 다른 페이지로 이동했다가 돌아와도 분석 결과·입력이 유지되도록 보관한다.
+  const [keyword, setKeyword] = usePersistedState("insight:analyze:keyword", "");
+  const [analysis, setAnalysis] = usePersistedState<Analysis | null>("insight:analyze:analysis", null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // seedKeyword로 자동 분석을 이미 돌린 값(재방문 시 같은 seed로 재조회하지 않기 위한 가드).
+  const [autoRanSeed, setAutoRanSeed] = usePersistedState<string | null>("insight:analyze:autoRanSeed", null);
 
-  const [bulkMode, setBulkMode] = useState(false);
-  const [bulkKeywords, setBulkKeywords] = useState("");
-  const [bulkResults, setBulkResults] = useState<BulkKeywordAnalysis[] | null>(null);
+  const [bulkMode, setBulkMode] = usePersistedState("insight:analyze:bulkMode", false);
+  const [bulkKeywords, setBulkKeywords] = usePersistedState("insight:analyze:bulkKeywords", "");
+  const [bulkResults, setBulkResults] = usePersistedState<BulkKeywordAnalysis[] | null>("insight:analyze:bulkResults", null);
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
 
@@ -119,10 +123,10 @@ export function KeywordScorePanel({ seedKeyword }: { seedKeyword?: string | null
   const [relatedLoading, setRelatedLoading] = useState(false);
 
   // 참조 사이트처럼 분석 모드에도 국가/영상형태/기간/번역 옵션을 제공한다(탐색 모드와 동일 개념).
-  const [region, setRegion] = useState("KR");
-  const [videoForm, setVideoForm] = useState<VideoForm>("all");
-  const [period, setPeriod] = useState<ExplorePeriod>("30d");
-  const [translateQuery, setTranslateQuery] = useState(false);
+  const [region, setRegion] = usePersistedState("insight:analyze:region", "KR");
+  const [videoForm, setVideoForm] = usePersistedState<VideoForm>("insight:analyze:videoForm", "all");
+  const [period, setPeriod] = usePersistedState<ExplorePeriod>("insight:analyze:period", "30d");
+  const [translateQuery, setTranslateQuery] = usePersistedState("insight:analyze:translateQuery", false);
 
   const analyzeParams = () => ({
     region,
@@ -164,8 +168,10 @@ export function KeywordScorePanel({ seedKeyword }: { seedKeyword?: string | null
 
   // UI_SPEC.md §7.1 "탐색·분석": 결과 하단 "핵심 토픽" 클릭 또는 홈 아이디어 카드의 [분석] 클릭 시 자동 실행된다.
   useEffect(() => {
-    if (seedKeyword) {
+    // 같은 seed로 이미 자동 분석했으면(재방문 등) 복원된 결과를 그대로 두고 재조회하지 않는다.
+    if (seedKeyword && seedKeyword !== autoRanSeed) {
       setKeyword(seedKeyword);
+      setAutoRanSeed(seedKeyword);
       runAnalysis(seedKeyword);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
