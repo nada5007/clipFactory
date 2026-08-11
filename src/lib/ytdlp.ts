@@ -1,4 +1,7 @@
 import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -35,4 +38,42 @@ export async function downloadAudioAsMp3(videoUrl: string, outPath: string): Pro
     ["-x", "--audio-format", "mp3", "--audio-quality", "192K", "-o", outPath, videoUrl],
     { timeout: 120_000 },
   );
+}
+
+// PROJECT_SPEC.md §2.5 "채널 분석 → 프로젝트 (Phase 2)": 영상은 받지 않고(--skip-download) 자동자막/업로드
+// 자막만 vtt로 받아 그 텍스트를 반환한다. 자막이 없으면 null(호출부에서 STT 또는 수동 붙여넣기로 폴백).
+// 자막 언어는 우선순위 목록으로 지정하고, 없으면 전체(all)에서 처음 받은 vtt를 쓴다.
+export async function fetchAutoSubtitles(
+  videoUrl: string,
+  langs: string[] = ["ko", "en"],
+): Promise<string | null> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clipfactory-subs-"));
+  const outTemplate = path.join(dir, "sub.%(ext)s");
+  try {
+    await execFileAsync(
+      "yt-dlp",
+      [
+        "--skip-download",
+        "--write-auto-sub",
+        "--write-sub",
+        "--sub-langs",
+        [...langs, "-live_chat"].join(","),
+        "--sub-format",
+        "vtt",
+        "-o",
+        outTemplate,
+        videoUrl,
+      ],
+      { timeout: 60_000 },
+    );
+
+    const files = await fs.readdir(dir);
+    const vtt = files.find((f) => f.endsWith(".vtt"));
+    if (!vtt) return null;
+    return await fs.readFile(path.join(dir, vtt), "utf-8");
+  } catch {
+    return null;
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
 }

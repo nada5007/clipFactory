@@ -568,3 +568,50 @@ export async function generateDailyIdeas(input: GenerateDailyIdeasInput): Promis
 
   return response.parsed_output.ideas;
 }
+
+// PROJECT_SPEC.md §2.5 "채널 분석 → 프로젝트 (Phase 2)": 자막(타임스탬프 포함)을 읽어 시청자 흥미를 끌
+// 구간을 목표 길이에 맞춰 선정한다. 연속/비연속 여러 구간을 묶어 하나의 하이라이트 세트로 구성해도 된다.
+export type EngagingSegment = { startMs: number; endMs: number; reason: string };
+
+const engagingSegmentsSchema = z.object({
+  segments: z
+    .array(
+      z.object({
+        startMs: z.number().int().min(0).describe("구간 시작(ms)"),
+        endMs: z.number().int().min(0).describe("구간 끝(ms). startMs보다 커야 함"),
+        reason: z.string().describe("이 구간을 고른 이유 (한국어 한 문장)"),
+      }),
+    )
+    .describe("선정한 하이라이트 구간들. 합산 길이가 목표 길이 근처가 되도록."),
+});
+
+export async function selectEngagingSegments(
+  transcriptForPrompt: string,
+  options: { targetDurationSec: number; format: "SHORT" | "LONG" },
+): Promise<EngagingSegment[]> {
+  const client = getClient();
+
+  const response = await client.messages.parse({
+    model: MODEL,
+    max_tokens: 8000,
+    thinking: { type: "adaptive" },
+    output_config: { effort: "medium", format: zodOutputFormat(engagingSegmentsSchema) },
+    system:
+      "너는 YouTube 쇼츠 편집 감독이다. 원본 영상의 타임스탬프 자막이 주어진다. " +
+      `시청자의 흥미를 끌 만한(후킹·반전·핵심 정보·감정 고조) 구간을 골라, 합산 길이가 목표 약 ${options.targetDurationSec}초에 ` +
+      "맞도록 구성한다. 구간은 연속일 필요 없이 여러 곳을 골라 묶어도 된다. 각 구간의 startMs/endMs는 자막 타임스탬프 " +
+      "범위 안이어야 하고, 자연스러운 문장 경계에서 끊는다. 너무 잘게 쪼개지 말고 3~8초 이상 의미 있는 덩어리로 고른다.",
+    messages: [
+      {
+        role: "user",
+        content: `영상 형태: ${options.format === "SHORT" ? "숏폼(세로)" : "롱폼(가로)"}\n목표 길이(초): ${options.targetDurationSec}\n\n자막(타임스탬프):\n${transcriptForPrompt}`,
+      },
+    ],
+  });
+
+  if (!response.parsed_output) {
+    throw new Error("하이라이트 구간 분석 결과를 파싱하지 못했습니다.");
+  }
+  // 방어적 정규화: 잘못된 범위(끝<=시작)는 버린다.
+  return response.parsed_output.segments.filter((s) => s.endMs > s.startMs);
+}

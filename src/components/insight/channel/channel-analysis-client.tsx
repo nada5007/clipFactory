@@ -185,6 +185,12 @@ export function ChannelAnalysisClient() {
             description,
             creationType: "AI_AUTO",
             videoFormat: chosenFormat,
+            // Phase 2/3가 쓸 원본 영상 링크를 구조화해 함께 저장한다.
+            sourceVideo: {
+              videoId: video.videoId,
+              url: `https://www.youtube.com/watch?v=${video.videoId}`,
+              title: video.title,
+            },
           }),
         });
         if (res.ok) ok += 1;

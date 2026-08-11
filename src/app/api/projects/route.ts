@@ -37,6 +37,9 @@ const createProjectSchema = z.object({
   description: z.string().optional(),
   creationType: z.enum(["MANUAL", "AI_AUTO"]).optional(),
   videoFormat: z.enum(["SHORT", "LONG"]).optional(),
+  sourceVideo: z
+    .object({ videoId: z.string().min(1), url: z.string().min(1), title: z.string() })
+    .optional(),
 });
 
 export async function POST(request: Request) {

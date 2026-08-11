@@ -54,15 +54,25 @@ export function getProject(id: string) {
   });
 }
 
+// 채널 분석에서 만든 프로젝트는 원본 유튜브 영상 정보를 구조화해 settings.sourceVideo에 담는다
+// (Phase 2 하이라이트 분석·Phase 3 영상 컷이 이 링크를 사용).
+export type SourceVideoRef = { videoId: string; url: string; title: string };
+
 export async function createProject(input: {
   channelId: string;
   title: string;
   description?: string;
   creationType?: CreationType;
   videoFormat?: VideoFormat;
+  sourceVideo?: SourceVideoRef;
 }) {
   const channel = await prisma.channel.findUniqueOrThrow({ where: { id: input.channelId } });
   const defaults = resolveProjectDefaults(channel, { videoFormat: input.videoFormat });
+
+  const settings = {
+    ...(defaults.settings && typeof defaults.settings === "object" ? (defaults.settings as Record<string, unknown>) : {}),
+    ...(input.sourceVideo ? { sourceVideo: input.sourceVideo } : {}),
+  };
 
   return prisma.project.create({
     data: {
@@ -71,7 +81,7 @@ export async function createProject(input: {
       channelId: input.channelId,
       creationType: input.creationType ?? "MANUAL",
       videoFormat: defaults.videoFormat,
-      settings: defaults.settings as Prisma.InputJsonValue,
+      settings: settings as Prisma.InputJsonValue,
     },
   });
 }
