@@ -40,6 +40,24 @@ export async function downloadAudioAsMp3(videoUrl: string, outPath: string): Pro
   );
 }
 
+// PROJECT_SPEC.md §2.5 "채널 분석 → 프로젝트 (Phase 3)": 원본 영상을 mp4로 받아 outPath에 저장한다
+// (구간 컷용). 대상 영상 권리는 사용자 책임(§2.5 원칙 개정) — 본인/라이선스 채널 사용을 전제로 한다.
+export async function downloadVideo(videoUrl: string, outPath: string): Promise<void> {
+  await execFileAsync(
+    "yt-dlp",
+    [
+      "-f",
+      "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+      "--merge-output-format",
+      "mp4",
+      "-o",
+      outPath,
+      videoUrl,
+    ],
+    { timeout: 300_000 },
+  );
+}
+
 // PROJECT_SPEC.md §2.5 "채널 분석 → 프로젝트 (Phase 2)": 영상은 받지 않고(--skip-download) 자동자막/업로드
 // 자막만 vtt로 받아 그 텍스트를 반환한다. 자막이 없으면 null(호출부에서 STT 또는 수동 붙여넣기로 폴백).
 // 자막 언어는 우선순위 목록으로 지정하고, 없으면 전체(all)에서 처음 받은 vtt를 쓴다.

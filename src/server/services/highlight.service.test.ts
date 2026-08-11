@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { selectEngagingSegments } from "@/lib/clients/anthropic";
+import { buildVideoSegmentClip } from "@/lib/ffmpeg";
 import { prisma } from "@/lib/prisma";
-import { fetchAutoSubtitles } from "@/lib/ytdlp";
-import { analyzeProjectHighlights } from "@/server/services/highlight.service";
+import { downloadVideo, fetchAutoSubtitles } from "@/lib/ytdlp";
+import { analyzeProjectHighlights, buildHighlightVideoTrack } from "@/server/services/highlight.service";
 
 vi.mock("@/lib/clients/anthropic", () => ({ selectEngagingSegments: vi.fn() }));
-vi.mock("@/lib/ytdlp", () => ({ fetchAutoSubtitles: vi.fn() }));
+vi.mock("@/lib/ytdlp", () => ({ fetchAutoSubtitles: vi.fn(), downloadVideo: vi.fn() }));
+vi.mock("@/lib/ffmpeg", () => ({ buildVideoSegmentClip: vi.fn() }));
 
 const SAMPLE_VTT = `WEBVTT
 
@@ -32,6 +34,8 @@ async function createProject(opts: { withSource: boolean }) {
 }
 
 async function cleanup(projectId: string, channelId: string) {
+  await prisma.timeline.deleteMany({ where: { projectId } });
+  await prisma.uploadedMedia.deleteMany({ where: { projectId } });
   await prisma.project.delete({ where: { id: projectId } });
   await prisma.channel.delete({ where: { id: channelId } });
 }
@@ -99,6 +103,89 @@ describe("analyzeProjectHighlights", () => {
     try {
       await expect(analyzeProjectHighlights(project.id, {})).rejects.toThrow("자막을 확보하지 못했");
       expect(fetchAutoSubtitles).not.toHaveBeenCalled();
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+});
+
+describe("buildHighlightVideoTrack", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(downloadVideo).mockResolvedValue(undefined);
+    vi.mocked(buildVideoSegmentClip).mockResolvedValue(undefined);
+  });
+
+  async function createProjectWithHighlights(segments: { startMs: number; endMs: number; reason: string }[]) {
+    const channel = await prisma.channel.create({ data: { name: "테스트 채널", defaultSettings: {} } });
+    const project = await prisma.project.create({
+      data: {
+        title: "트랙 빌드 테스트",
+        channelId: channel.id,
+        videoFormat: "SHORT",
+        settings: {
+          sourceVideo: { videoId: "vid123", url: "https://www.youtube.com/watch?v=vid123", title: "원본" },
+          highlightSegments: segments,
+        },
+      },
+    });
+    return { channel, project };
+  }
+
+  it("구간을 잘라 VIDEO 트랙에 순차 배치하고 타임라인 길이를 확장한다", async () => {
+    const { channel, project } = await createProjectWithHighlights([
+      { startMs: 8000, endMs: 20000, reason: "후킹" }, // 12s
+      { startMs: 35000, endMs: 50000, reason: "반전" }, // 15s
+    ]);
+    try {
+      const result = await buildHighlightVideoTrack(project.id);
+
+      expect(downloadVideo).toHaveBeenCalledWith("https://www.youtube.com/watch?v=vid123", expect.stringContaining("source/original.mp4"));
+      expect(buildVideoSegmentClip).toHaveBeenCalledTimes(2);
+      // 첫 구간: offset 8s, 길이 12s, SHORT 해상도(1080x1920)
+      expect(buildVideoSegmentClip).toHaveBeenCalledWith(expect.any(String), 8, 12, 1080, 1920, expect.any(String));
+      expect(result.clipCount).toBe(2);
+      expect(result.totalDurationMs).toBe(27000);
+
+      const timeline = await prisma.timeline.findUniqueOrThrow({ where: { projectId: project.id } });
+      const videoTrack = await prisma.timelineTrack.findFirstOrThrow({
+        where: { timelineId: timeline.id, type: "VIDEO" },
+        include: { clips: { orderBy: { startMs: "asc" } } },
+      });
+      expect(videoTrack.clips).toHaveLength(2);
+      expect(videoTrack.clips[0]).toMatchObject({ startMs: 0, endMs: 12000 });
+      expect(videoTrack.clips[1]).toMatchObject({ startMs: 12000, endMs: 27000 });
+      expect(timeline.durationMs).toBe(27000);
+
+      const updated = await prisma.project.findUniqueOrThrow({ where: { id: project.id } });
+      expect(updated.status).toBe("EDITING");
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("재실행하면 기존 VIDEO 클립을 지우고 다시 배치한다(중복 방지)", async () => {
+    const { channel, project } = await createProjectWithHighlights([{ startMs: 0, endMs: 5000, reason: "x" }]);
+    try {
+      await buildHighlightVideoTrack(project.id);
+      await buildHighlightVideoTrack(project.id);
+
+      const timeline = await prisma.timeline.findUniqueOrThrow({ where: { projectId: project.id } });
+      const videoTrack = await prisma.timelineTrack.findFirstOrThrow({
+        where: { timelineId: timeline.id, type: "VIDEO" },
+        include: { clips: true },
+      });
+      expect(videoTrack.clips).toHaveLength(1); // 중복 누적되지 않음
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("하이라이트 구간이 없으면 안내 에러를 던진다", async () => {
+    const { channel, project } = await createProjectWithHighlights([]);
+    try {
+      await expect(buildHighlightVideoTrack(project.id)).rejects.toThrow("선정된 하이라이트 구간이 없습니다");
+      expect(downloadVideo).not.toHaveBeenCalled();
     } finally {
       await cleanup(project.id, channel.id);
     }
