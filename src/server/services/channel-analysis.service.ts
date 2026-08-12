@@ -60,11 +60,9 @@ export async function scanChannel(input: string, period: ScanPeriod = SCAN_PERIO
   do {
     const page = await listPlaylistItems(uploadsPlaylistId, pageToken);
     for (const item of page.items) {
-      if (cutoffMs !== null && item.contentDetails.videoPublishedAt) {
-        if (new Date(item.contentDetails.videoPublishedAt).getTime() < cutoffMs) {
-          reachedCutoff = true;
-          break;
-        }
+      if (item.contentDetails.videoPublishedAt && new Date(item.contentDetails.videoPublishedAt).getTime() < cutoffMs) {
+        reachedCutoff = true;
+        break;
       }
       videoIds.push(item.contentDetails.videoId);
       if (videoIds.length >= MAX_SCAN_VIDEOS) break;

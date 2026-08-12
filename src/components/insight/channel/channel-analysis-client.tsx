@@ -18,7 +18,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SCAN_PERIOD_DEFAULT, SCAN_PERIOD_OPTIONS, scanPeriodLabel, type ScanPeriod } from "@/lib/scan-period";
 import { usePersistedState } from "@/lib/use-persisted-state";
-import type { ScannedVideoWithRatio } from "@/lib/channel-scan";
+import type { ScannedVideo, ScannedVideoWithRatio } from "@/lib/channel-scan";
 import type { ChannelScanReport, ChannelSectionsReport } from "@/server/services/channel-analysis.service";
 
 const numberFormat = new Intl.NumberFormat("ko-KR");
@@ -108,38 +108,84 @@ function Heatmap({ heatmap }: { heatmap: ChannelScanReport["analysis"]["heatmap"
   );
 }
 
-// featured 카테고리(재생목록 섹션) 재현: 채널 홈처럼 재생목록별 가로 스크롤 캐러셀로 보여준다.
-function ChannelSections({ channelId }: { channelId: string }) {
-  const [report, setReport] = usePersistedState<ChannelSectionsReport | null>("insight:channel:sections", null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+// 프로젝트 생성 체크박스 + 떡상 배수·조회수를 함께 보여주는 영상 카드(TOP10·카테고리 캐러셀 공용).
+function VideoCard({
+  video,
+  ratio,
+  selected,
+  onToggle,
+  className,
+  showRelativeTime,
+}: {
+  video: ScannedVideo;
+  ratio: number;
+  selected: boolean;
+  onToggle: () => void;
+  className?: string;
+  showRelativeTime?: boolean;
+}) {
+  return (
+    <div className={`relative flex flex-col gap-1 overflow-hidden rounded-lg border bg-card ${className ?? ""}`}>
+      <div className="absolute left-1 top-1 z-10 rounded bg-background/80 p-0.5">
+        <Checkbox checked={selected} onCheckedChange={onToggle} aria-label="프로젝트 생성 대상으로 선택" />
+      </div>
+      <VideoThumb thumbnailUrl={video.thumbnailUrl} title={video.title} videoId={video.videoId} />
+      <div className="flex flex-col gap-0.5 px-2 pb-2">
+        <a
+          href={youtubeWatchUrl(video.videoId)}
+          target="_blank"
+          rel="noreferrer"
+          className="line-clamp-2 text-xs font-medium hover:text-primary hover:underline"
+          title={video.title}
+        >
+          {video.title}
+        </a>
+        <p className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+          {ratio > 0 && (
+            <span className="rounded-full bg-primary/10 px-1.5 py-0.5 font-medium text-primary">{ratio.toFixed(1)}배</span>
+          )}
+          <span>
+            조회수 {numberFormat.format(video.viewCount)}회{showRelativeTime ? ` · ${relativeTime(video.publishedAt)}` : ""}
+          </span>
+        </p>
+      </div>
+    </div>
+  );
+}
 
-  useEffect(() => {
-    if (!channelId) return;
-    // 이미 같은 채널의 섹션을 불러온 상태면 재조회하지 않는다(내비게이션 복원 + 쿼터 절약).
-    if (report?.channelId === channelId) return;
-    setLoading(true);
-    setError(null);
-    fetch(`/api/insight/channel/sections?${new URLSearchParams({ channelId }).toString()}`)
-      .then(async (res) => {
-        const body = await res.json();
-        if (!res.ok) throw new Error(body.error ?? "채널 카테고리를 불러오지 못했습니다.");
-        setReport(body);
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : "채널 카테고리를 불러오지 못했습니다."))
-      .finally(() => setLoading(false));
-    // report는 의존성에서 제외(무한 루프 방지) — channelId 변경 시에만 재조회.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channelId]);
-
+// featured 카테고리(재생목록 섹션) 재현: 채널 홈처럼 재생목록별 가로 스크롤 캐러셀로 보여준다(부모가 데이터를 관리).
+function ChannelSections({
+  sections,
+  loading,
+  error,
+  median,
+  selectedIds,
+  toggleSelect,
+  selectedCount,
+  onCreate,
+}: {
+  sections: ChannelSectionsReport["sections"] | undefined;
+  loading: boolean;
+  error: string | null;
+  median: number;
+  selectedIds: Set<string>;
+  toggleSelect: (id: string) => void;
+  selectedCount: number;
+  onCreate: () => void;
+}) {
   if (loading) return <p className="text-sm text-muted-foreground">채널 카테고리 불러오는 중...</p>;
   if (error) return <p className="text-sm text-destructive">{error}</p>;
-  if (!report || report.channelId !== channelId || report.sections.length === 0) return null;
+  if (!sections || sections.length === 0) return null;
 
   return (
     <div className="flex flex-col gap-6">
-      <h3 className="text-sm font-semibold">채널 카테고리 (재생목록)</h3>
-      {report.sections.map((section) => (
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">채널 카테고리 (재생목록)</h3>
+        <Button size="sm" disabled={selectedCount === 0} onClick={onCreate}>
+          프로젝트 생성{selectedCount > 0 ? ` (${selectedCount})` : ""}
+        </Button>
+      </div>
+      {sections.map((section) => (
         <div key={section.playlistId} className="flex flex-col gap-2">
           <div className="flex items-baseline gap-2">
             <h4 className="text-sm font-semibold">{section.title}</h4>
@@ -147,23 +193,15 @@ function ChannelSections({ channelId }: { channelId: string }) {
           </div>
           <div className="flex gap-3 overflow-x-auto pb-2">
             {section.videos.map((video) => (
-              <div key={video.videoId} className="flex w-40 shrink-0 flex-col gap-1 overflow-hidden rounded-lg border bg-card">
-                <VideoThumb thumbnailUrl={video.thumbnailUrl} title={video.title} videoId={video.videoId} />
-                <div className="flex flex-col gap-0.5 px-2 pb-2">
-                  <a
-                    href={youtubeWatchUrl(video.videoId)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="line-clamp-2 text-xs font-medium hover:text-primary hover:underline"
-                    title={video.title}
-                  >
-                    {video.title}
-                  </a>
-                  <p className="text-[11px] text-muted-foreground">
-                    조회수 {numberFormat.format(video.viewCount)}회 · {relativeTime(video.publishedAt)}
-                  </p>
-                </div>
-              </div>
+              <VideoCard
+                key={video.videoId}
+                className="w-40 shrink-0"
+                video={video}
+                ratio={median > 0 ? video.viewCount / median : 0}
+                selected={selectedIds.has(video.videoId)}
+                onToggle={() => toggleSelect(video.videoId)}
+                showRelativeTime
+              />
             ))}
           </div>
         </div>
@@ -176,6 +214,9 @@ export function ChannelAnalysisClient() {
   const [input, setInput] = usePersistedState("insight:channel:input", "");
   const [period, setPeriod] = usePersistedState<ScanPeriod>("insight:channel:period", SCAN_PERIOD_DEFAULT);
   const [report, setReport] = usePersistedState<ChannelScanReport | null>("insight:channel:report", null);
+  const [sections, setSections] = usePersistedState<ChannelSectionsReport | null>("insight:channel:sections", null);
+  const [sectionsLoading, setSectionsLoading] = useState(false);
+  const [sectionsError, setSectionsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [channelSaved, setChannelSaved] = useState(false);
@@ -201,17 +242,43 @@ export function ChannelAnalysisClient() {
       .catch(() => undefined);
   }, []);
 
-  // 세 목록(TOP10/떡상/그리드)에 같은 영상이 겹쳐 나오므로 videoId 기준으로 메타데이터를 한 곳에 모아
-  // 선택 항목의 제목·조회수·링크를 프로젝트 명명에 쓴다.
+  // report.channel.id가 바뀌면 채널 카테고리(재생목록) 섹션을 불러온다(같은 채널이면 재조회 안 함 — 쿼터 절약).
+  const reportChannelId = report?.channel.id;
+  useEffect(() => {
+    if (!reportChannelId) return;
+    if (sections?.channelId === reportChannelId) return;
+    setSectionsLoading(true);
+    setSectionsError(null);
+    fetch(`/api/insight/channel/sections?${new URLSearchParams({ channelId: reportChannelId }).toString()}`)
+      .then(async (res) => {
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error ?? "채널 카테고리를 불러오지 못했습니다.");
+        setSections(body);
+      })
+      .catch((e) => setSectionsError(e instanceof Error ? e.message : "채널 카테고리를 불러오지 못했습니다."))
+      .finally(() => setSectionsLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportChannelId]);
+
+  // 여러 목록(TOP10/떡상/그리드/카테고리)에 같은 영상이 겹쳐 나오므로 videoId 기준으로 메타데이터를 한 곳에
+  // 모아 선택 항목의 제목·조회수·링크를 프로젝트 명명에 쓴다. 카테고리 영상은 스캔 median 대비 배수를 계산해 담는다.
   const videoById = useMemo(() => {
     const map = new Map<string, ScannedVideoWithRatio>();
+    const median = report?.analysis.medianViewCount ?? 0;
     if (report) {
       for (const v of [...report.analysis.topVideos, ...report.analysis.surgedVideos, ...report.analysis.videos]) {
         map.set(v.videoId, v);
       }
     }
+    if (sections && sections.channelId === reportChannelId) {
+      for (const s of sections.sections) {
+        for (const v of s.videos) {
+          if (!map.has(v.videoId)) map.set(v.videoId, { ...v, ratio: median > 0 ? v.viewCount / median : 0 });
+        }
+      }
+    }
     return map;
-  }, [report]);
+  }, [report, sections, reportChannelId]);
 
   const toggleSelect = (id: string) =>
     setSelectedIds((prev) => {
@@ -395,33 +462,26 @@ export function ChannelAnalysisClient() {
             </Button>
           </div>
 
-          <ChannelSections channelId={report.channel.id} />
-
           <div>
-            <h3 className="text-sm font-semibold">인기 영상 TOP 10 ({scanPeriodLabel(report.period ?? SCAN_PERIOD_DEFAULT)})</h3>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold">인기 영상 TOP 10 ({scanPeriodLabel(report.period ?? SCAN_PERIOD_DEFAULT)})</h3>
+              <Button size="sm" disabled={selectedIds.size === 0} onClick={openCreateDialog}>
+                프로젝트 생성{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}
+              </Button>
+            </div>
             <p className="mb-2 text-xs text-muted-foreground">
               ※ 채널 역대 전체가 아니라 <b>선택 기간 내 업로드</b> 중 조회수 상위입니다(유튜브 &lsquo;인기순&rsquo;과 다를 수
-              있음). 더 넓게 보려면 위 기간을 늘려주세요.
+              있음). 더 넓게 보려면 위 기간을 늘려주세요. 배수는 선택 기간 median 대비값.
             </p>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
               {report.analysis.topVideos.map((video) => (
-                <div key={video.videoId} className="flex flex-col gap-1 overflow-hidden rounded-lg border bg-card">
-                  <VideoThumb thumbnailUrl={video.thumbnailUrl} title={video.title} videoId={video.videoId} />
-                  <div className="flex flex-col gap-0.5 px-2 pb-2">
-                    <a
-                      href={youtubeWatchUrl(video.videoId)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="line-clamp-2 text-xs font-medium hover:text-primary hover:underline"
-                      title={video.title}
-                    >
-                      {video.title}
-                    </a>
-                    <p className="text-[11px] text-muted-foreground">
-                      조회수 {numberFormat.format(video.viewCount)}회
-                    </p>
-                  </div>
-                </div>
+                <VideoCard
+                  key={video.videoId}
+                  video={video}
+                  ratio={video.ratio}
+                  selected={selectedIds.has(video.videoId)}
+                  onToggle={() => toggleSelect(video.videoId)}
+                />
               ))}
             </div>
           </div>
@@ -469,6 +529,17 @@ export function ChannelAnalysisClient() {
             )}
           </div>
 
+          <ChannelSections
+            sections={sections?.channelId === report.channel.id ? sections.sections : undefined}
+            loading={sectionsLoading}
+            error={sectionsError}
+            median={report.analysis.medianViewCount}
+            selectedIds={selectedIds}
+            toggleSelect={toggleSelect}
+            selectedCount={selectedIds.size}
+            onCreate={openCreateDialog}
+          />
+
           <div>
             <h3 className="mb-2 text-sm font-semibold">골든 업로드 시간대 (KST, 요일×시간)</h3>
             {report.analysis.heatmap.length === 0 ? (
@@ -479,12 +550,16 @@ export function ChannelAnalysisClient() {
           </div>
 
           <div>
-            <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="mb-1 flex items-center justify-between gap-2">
               <h3 className="text-sm font-semibold">썸네일 그리드 (조회수 순)</h3>
               <Button size="sm" disabled={selectedIds.size === 0} onClick={openCreateDialog}>
                 프로젝트 생성{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}
               </Button>
             </div>
+            <p className="mb-2 text-xs text-muted-foreground">
+              선택 기간 내 스캔한 업로드 <b>전부</b>를 조회수 높은 순으로 나열한 썸네일 갤러리입니다. 잘되는 영상들의 <b>썸네일
+              디자인 패턴</b>(색·글자·구도)을 한눈에 훑고, 체크박스로 여러 개를 골라 바로 프로젝트로 만들 수 있습니다.
+            </p>
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
               {report.analysis.videos.map((video) => (
                 <div key={video.videoId} className="relative">
