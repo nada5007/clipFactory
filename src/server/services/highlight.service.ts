@@ -137,6 +137,8 @@ export async function buildHighlightVideoTrack(projectId: string): Promise<Build
       width,
       height,
       resolveProjectFilePath(projectId, relPath),
+      undefined,
+      true, // 원본 오디오 유지(사용자 결정): 하이라이트 클립은 원본 소리를 그대로 담는다.
     );
 
     const media = await prisma.uploadedMedia.create({

@@ -146,8 +146,8 @@ describe("buildHighlightVideoTrack", () => {
 
       expect(downloadVideo).toHaveBeenCalledWith("https://www.youtube.com/watch?v=vid123", expect.stringContaining("source/original.mp4"));
       expect(buildVideoSegmentClip).toHaveBeenCalledTimes(2);
-      // 첫 구간: offset 8s, 길이 12s, SHORT 해상도(1080x1920)
-      expect(buildVideoSegmentClip).toHaveBeenCalledWith(expect.any(String), 8, 12, 1080, 1920, expect.any(String));
+      // 첫 구간: offset 8s, 길이 12s, SHORT 해상도(1080x1920), 원본 오디오 유지(keepAudio=true)
+      expect(buildVideoSegmentClip).toHaveBeenCalledWith(expect.any(String), 8, 12, 1080, 1920, expect.any(String), undefined, true);
       expect(result.clipCount).toBe(2);
       expect(result.totalDurationMs).toBe(27000);
 

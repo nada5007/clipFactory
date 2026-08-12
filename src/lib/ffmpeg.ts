@@ -97,6 +97,7 @@ export async function buildVideoSegmentClip(
   height: number,
   outputPath: string,
   extraFilters?: string,
+  keepAudio = false,
 ): Promise<void> {
   const vf = [
     `scale=${width}:${height}:force_original_aspect_ratio=decrease`,
@@ -104,6 +105,10 @@ export async function buildVideoSegmentClip(
     ...(extraFilters ? [extraFilters] : []),
     "format=yuv420p",
   ].join(",");
+
+  // 렌더 파이프라인은 오디오를 TTS/BGM 트랙에서 따로 합성하므로 기본은 무음(-an). 채널 분석 하이라이트처럼
+  // "원본 오디오 유지"가 필요한 경우 keepAudio=true로 원본 소리를 aac로 함께 인코딩한다.
+  const audioArgs = keepAudio ? ["-c:a", "aac", "-b:a", "192k"] : ["-an"];
 
   await execFileAsync(FFMPEG_BIN, [
     "-y",
@@ -117,7 +122,7 @@ export async function buildVideoSegmentClip(
     vf,
     "-r",
     "30",
-    "-an",
+    ...audioArgs,
     "-pix_fmt",
     "yuv420p",
     outputPath,
