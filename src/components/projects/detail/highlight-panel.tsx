@@ -31,6 +31,10 @@ export function HighlightPanel({ projectId }: { projectId: string }) {
   const [buildError, setBuildError] = useState<string | null>(null);
   const [buildResult, setBuildResult] = useState<{ clipCount: number; totalDurationMs: number } | null>(null);
 
+  const [assetsRunning, setAssetsRunning] = useState(false);
+  const [assetsError, setAssetsError] = useState<string | null>(null);
+  const [assetsResult, setAssetsResult] = useState<{ subtitleCount: number; scriptTitle: string } | null>(null);
+
   const loadSettings = useCallback(() => {
     fetch(`/api/projects/${projectId}`)
       .then((res) => (res.ok ? res.json() : null))
@@ -81,6 +85,19 @@ export function HighlightPanel({ projectId }: { projectId: string }) {
       })
       .catch((e) => setBuildError(e instanceof Error ? e.message : "영상 트랙 생성에 실패했습니다."))
       .finally(() => setBuilding(false));
+  };
+
+  const runAssets = () => {
+    setAssetsRunning(true);
+    setAssetsError(null);
+    fetch(`/api/projects/${projectId}/highlight-assets`, { method: "POST" })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "대본·자막 생성에 실패했습니다.");
+        setAssetsResult(data);
+      })
+      .catch((e) => setAssetsError(e instanceof Error ? e.message : "대본·자막 생성에 실패했습니다."))
+      .finally(() => setAssetsRunning(false));
   };
 
   if (!sourceVideo) {
@@ -184,6 +201,30 @@ export function HighlightPanel({ projectId }: { projectId: string }) {
             확인하세요.
           </p>
         )}
+      </div>
+
+      {/* Phase 3b: 대본·자막 자동 생성 */}
+      <div className="flex flex-col gap-3 rounded-lg border bg-card p-4">
+        <div>
+          <h3 className="text-sm font-semibold">3단계 · 대본·자막 자동 생성</h3>
+          <p className="text-xs text-muted-foreground">
+            원본 자막을 잘라낸 구간에 맞춰 재배치해 <b>영상 내 오디오 자막</b>을 SUBTITLE 트랙에 넣고, 원본 내용을 바탕으로
+            <b> 새 대본(스크립트)</b>을 생성합니다(스크립트 탭에서 확인·수정 가능).
+          </p>
+        </div>
+        <Button onClick={runAssets} disabled={assetsRunning || segments.length === 0} variant="secondary" className="w-fit">
+          {assetsRunning ? "생성 중..." : "대본·자막 자동 생성"}
+        </Button>
+        {assetsError && <p className="text-sm text-destructive">{assetsError}</p>}
+        {assetsResult && (
+          <p className="text-sm">
+            자막 <span className="font-semibold text-primary">{assetsResult.subtitleCount}개</span> 생성 · 대본 &ldquo;
+            {assetsResult.scriptTitle}&rdquo; 저장 완료.
+          </p>
+        )}
+        <p className="text-xs text-muted-foreground">
+          ※ 대본을 음성(TTS)으로 읽어주는 내레이션 자동 생성은 원본 오디오 유지 여부 등 설계 확정 후 추가 예정입니다.
+        </p>
       </div>
     </div>
   );

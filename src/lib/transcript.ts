@@ -94,6 +94,36 @@ export function parseTranscript(text: string): TranscriptCue[] {
   return parseTimestampedText(text);
 }
 
+// PROJECT_SPEC.md §2.5 "채널 분석 → 프로젝트 (Phase 3b)": 선정 구간(segments)을 끝에 이어붙여 재구성한
+// 새 타임라인 기준으로, 원본 자막 큐를 잘라·이동해 "영상 내 오디오 자막" 클립을 만든다. 각 구간이
+// 새 타임라인에서 차지하는 시작 위치를 누적(cursor)하며, 그 구간과 겹치는 큐만 구간 경계로 클램프해 옮긴다.
+export type RetimedSubtitle = { startMs: number; endMs: number; text: string };
+
+export function retimeCuesToTimeline(
+  cues: TranscriptCue[],
+  segments: { startMs: number; endMs: number }[],
+): RetimedSubtitle[] {
+  const sortedSegments = [...segments].sort((a, b) => a.startMs - b.startMs);
+  const out: RetimedSubtitle[] = [];
+  let cursor = 0;
+  for (const seg of sortedSegments) {
+    const segDur = seg.endMs - seg.startMs;
+    if (segDur <= 0) continue;
+    for (const cue of cues) {
+      const overlapStart = Math.max(cue.startMs, seg.startMs);
+      const overlapEnd = Math.min(cue.endMs, seg.endMs);
+      if (overlapEnd <= overlapStart) continue;
+      out.push({
+        startMs: cursor + (overlapStart - seg.startMs),
+        endMs: cursor + (overlapEnd - seg.startMs),
+        text: cue.text,
+      });
+    }
+    cursor += segDur;
+  }
+  return out;
+}
+
 // AI 프롬프트에 넣기 좋은 형태: "[mm:ss] 텍스트" 줄 목록.
 export function formatCuesForPrompt(cues: TranscriptCue[]): string {
   const stamp = (ms: number) => {

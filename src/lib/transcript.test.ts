@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatCuesForPrompt, parseTranscript } from "@/lib/transcript";
+import { formatCuesForPrompt, parseTranscript, retimeCuesToTimeline } from "@/lib/transcript";
 
 describe("parseTranscript — VTT", () => {
   const vtt = `WEBVTT
@@ -87,5 +87,41 @@ describe("formatCuesForPrompt", () => {
       { startMs: 90000, endMs: 95000, text: "반전" },
     ]);
     expect(out).toBe("[00:12] 도입\n[01:30] 반전");
+  });
+});
+
+describe("retimeCuesToTimeline", () => {
+  const cues = [
+    { startMs: 0, endMs: 5000, text: "구간0 밖 앞" },
+    { startMs: 8000, endMs: 12000, text: "A 구간 자막1" },
+    { startMs: 12000, endMs: 18000, text: "A 구간 자막2" },
+    { startMs: 25000, endMs: 30000, text: "구간 사이(선택 안 됨)" },
+    { startMs: 35000, endMs: 40000, text: "B 구간 자막1" },
+  ];
+
+  it("선정 구간과 겹치는 자막만 새 타임라인 위치로 옮긴다", () => {
+    // A: 8~20s (12s), B: 35~50s → 새 타임라인 A[0~12s], B[12~27s]
+    const result = retimeCuesToTimeline(cues, [
+      { startMs: 8000, endMs: 20000 },
+      { startMs: 35000, endMs: 50000 },
+    ]);
+    expect(result).toEqual([
+      { startMs: 0, endMs: 4000, text: "A 구간 자막1" }, // 8~12 → 0~4
+      { startMs: 4000, endMs: 10000, text: "A 구간 자막2" }, // 12~18 → 4~10
+      { startMs: 12000, endMs: 17000, text: "B 구간 자막1" }, // 35~40 → 12~17
+    ]);
+  });
+
+  it("구간 경계를 넘는 자막은 구간 안으로 클램프한다", () => {
+    const result = retimeCuesToTimeline(
+      [{ startMs: 6000, endMs: 14000, text: "경계 걸침" }],
+      [{ startMs: 8000, endMs: 12000 }], // 8~12
+    );
+    // 겹침 8~12 → 새 0~4
+    expect(result).toEqual([{ startMs: 0, endMs: 4000, text: "경계 걸침" }]);
+  });
+
+  it("겹치는 자막이 없으면 빈 배열", () => {
+    expect(retimeCuesToTimeline(cues, [{ startMs: 100000, endMs: 100500 }])).toEqual([]);
   });
 });

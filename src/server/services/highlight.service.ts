@@ -1,8 +1,8 @@
-import { selectEngagingSegments, type EngagingSegment } from "@/lib/clients/anthropic";
+import { generateScriptPattern, selectEngagingSegments, type EngagingSegment } from "@/lib/clients/anthropic";
 import { buildVideoSegmentClip } from "@/lib/ffmpeg";
 import { prisma } from "@/lib/prisma";
 import { ensureProjectDir, resolveProjectFilePath } from "@/lib/storage";
-import { formatCuesForPrompt, parseTranscript } from "@/lib/transcript";
+import { formatCuesForPrompt, parseTranscript, retimeCuesToTimeline, type TranscriptCue } from "@/lib/transcript";
 import { resolveVideoResolution } from "@/lib/video";
 import { downloadVideo, fetchAutoSubtitles } from "@/lib/ytdlp";
 import { getOrSyncTimeline } from "@/server/services/timeline.service";
@@ -64,13 +64,14 @@ export async function analyzeProjectHighlights(
   const targetDurationSec = input.targetDurationSec && input.targetDurationSec > 0 ? input.targetDurationSec : DEFAULT_TARGET_SEC[format];
   const segments = await selectEngagingSegments(formatCuesForPrompt(cues), { targetDurationSec, format });
 
-  // 3) 결과를 프로젝트 settings에 저장(Phase 3 컷이 사용).
+  // 3) 결과를 프로젝트 settings에 저장(Phase 3 컷/자막이 사용). 자막 재타이밍(Phase 3b)을 위해 원본 큐도 보관한다.
   await prisma.project.update({
     where: { id: projectId },
     data: {
       settings: {
         ...settings,
         highlightSegments: segments,
+        transcriptCues: cues,
         highlightMeta: { transcriptSource, cueCount: cues.length, targetDurationSec, analyzedAt: new Date().toISOString() },
       } as never,
     },
@@ -160,4 +161,74 @@ export async function buildHighlightVideoTrack(projectId: string): Promise<Build
   await prisma.project.update({ where: { id: projectId }, data: { status: "EDITING" } });
 
   return { clipCount, totalDurationMs: cursorMs };
+}
+
+export type HighlightAssetsResult = { subtitleCount: number; scriptTitle: string };
+
+// PROJECT_SPEC.md §2.5 "채널 분석 → 프로젝트 (Phase 3b)": VIDEO 트랙 구성 후 ① 영상 내 오디오 자막
+// (원본 자막 큐를 선정 구간 기준으로 재타이밍해 SUBTITLE 트랙에 생성) + ② AI 대본 생성(스크립트 저장).
+// 내레이션 TTS(대본 음성)는 오디오 설계 결정이 필요해 이 단계에서 자동 생성하지 않는다.
+export async function generateHighlightAssets(projectId: string): Promise<HighlightAssetsResult> {
+  const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } });
+  const settings = (project.settings && typeof project.settings === "object" ? project.settings : {}) as Record<
+    string,
+    unknown
+  >;
+  const sourceVideo = settings.sourceVideo as SourceVideo | undefined;
+  const segments = (settings.highlightSegments as EngagingSegment[] | undefined) ?? [];
+  const cues = (settings.transcriptCues as TranscriptCue[] | undefined) ?? [];
+
+  if (segments.length === 0) {
+    throw new Error("선정된 하이라이트 구간이 없습니다. 먼저 '하이라이트 분석'을 실행해주세요.");
+  }
+
+  // ① 영상 내 오디오 자막: 자막 큐를 새 타임라인으로 재타이밍해 SUBTITLE(autoSync) 트랙에 생성.
+  const timeline = await getOrSyncTimeline(projectId);
+  if (!timeline) throw new Error("타임라인을 불러올 수 없습니다.");
+  const subtitleTrack = await prisma.timelineTrack.findFirst({
+    where: { timelineId: timeline.id, type: "SUBTITLE", autoSync: true },
+  });
+  if (!subtitleTrack) throw new Error("SUBTITLE 트랙을 찾을 수 없습니다.");
+
+  const retimed = retimeCuesToTimeline(cues, segments);
+  await prisma.timelineClip.deleteMany({ where: { trackId: subtitleTrack.id } });
+  if (retimed.length > 0) {
+    await prisma.timelineClip.createMany({
+      data: retimed.map((s) => ({
+        trackId: subtitleTrack.id,
+        startMs: s.startMs,
+        endMs: s.endMs,
+        payload: { label: s.text.slice(0, 40), text: s.text },
+      })),
+    });
+  }
+
+  // ② AI 대본 생성: 원본 영상 제목 + 자막 발췌를 근거로 새 내레이션 대본을 만들어 프로젝트 스크립트로 저장.
+  const excerpt = cues.map((c) => c.text).join(" ").slice(0, 1500);
+  const generated = await generateScriptPattern({
+    title: sourceVideo?.title ?? project.title,
+    description: excerpt || project.description || "",
+  });
+  await prisma.script.upsert({
+    where: { projectId },
+    create: {
+      projectId,
+      topic: sourceVideo?.title ?? project.title,
+      title: generated.title,
+      hook: generated.hook,
+      body: generated.body,
+      imagePrompts: generated.imagePrompts,
+      model: "claude",
+    },
+    update: {
+      topic: sourceVideo?.title ?? project.title,
+      title: generated.title,
+      hook: generated.hook,
+      body: generated.body,
+      imagePrompts: generated.imagePrompts,
+      model: "claude",
+    },
+  });
+
+  return { subtitleCount: retimed.length, scriptTitle: generated.title };
 }

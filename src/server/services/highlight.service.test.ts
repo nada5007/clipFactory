@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { selectEngagingSegments } from "@/lib/clients/anthropic";
+import { generateScriptPattern, selectEngagingSegments } from "@/lib/clients/anthropic";
 import { buildVideoSegmentClip } from "@/lib/ffmpeg";
 import { prisma } from "@/lib/prisma";
 import { downloadVideo, fetchAutoSubtitles } from "@/lib/ytdlp";
-import { analyzeProjectHighlights, buildHighlightVideoTrack } from "@/server/services/highlight.service";
+import {
+  analyzeProjectHighlights,
+  buildHighlightVideoTrack,
+  generateHighlightAssets,
+} from "@/server/services/highlight.service";
 
-vi.mock("@/lib/clients/anthropic", () => ({ selectEngagingSegments: vi.fn() }));
+vi.mock("@/lib/clients/anthropic", () => ({ selectEngagingSegments: vi.fn(), generateScriptPattern: vi.fn() }));
 vi.mock("@/lib/ytdlp", () => ({ fetchAutoSubtitles: vi.fn(), downloadVideo: vi.fn() }));
 vi.mock("@/lib/ffmpeg", () => ({ buildVideoSegmentClip: vi.fn() }));
 
@@ -188,6 +192,83 @@ describe("buildHighlightVideoTrack", () => {
       expect(downloadVideo).not.toHaveBeenCalled();
     } finally {
       await cleanup(project.id, channel.id);
+    }
+  });
+});
+
+describe("generateHighlightAssets", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(generateScriptPattern).mockResolvedValue({
+      title: "재해석 대본 제목",
+      hook: "훅",
+      body: "본문",
+      imagePrompts: ["a", "b"],
+    });
+  });
+
+  async function createProjectForAssets() {
+    const channel = await prisma.channel.create({ data: { name: "테스트 채널", defaultSettings: {} } });
+    const project = await prisma.project.create({
+      data: {
+        title: "에셋 테스트",
+        channelId: channel.id,
+        videoFormat: "SHORT",
+        settings: {
+          sourceVideo: { videoId: "v1", url: "https://youtu.be/v1", title: "원본" },
+          highlightSegments: [
+            { startMs: 8000, endMs: 20000, reason: "A" },
+            { startMs: 35000, endMs: 50000, reason: "B" },
+          ],
+          transcriptCues: [
+            { startMs: 8000, endMs: 14000, text: "A자막" },
+            { startMs: 36000, endMs: 40000, text: "B자막" },
+            { startMs: 60000, endMs: 62000, text: "선택 안 된 구간 자막" },
+          ],
+        },
+      },
+    });
+    return { channel, project };
+  }
+
+  it("자막 큐를 재타이밍해 SUBTITLE 트랙에 만들고 AI 대본을 스크립트로 저장한다", async () => {
+    const { channel, project } = await createProjectForAssets();
+    try {
+      const result = await generateHighlightAssets(project.id);
+
+      // 선택 구간에 겹치는 큐 2개만(선택 안 된 구간 자막 제외)
+      expect(result.subtitleCount).toBe(2);
+      expect(result.scriptTitle).toBe("재해석 대본 제목");
+
+      const timeline = await prisma.timeline.findUniqueOrThrow({ where: { projectId: project.id } });
+      const subtitleTrack = await prisma.timelineTrack.findFirstOrThrow({
+        where: { timelineId: timeline.id, type: "SUBTITLE" },
+        include: { clips: { orderBy: { startMs: "asc" } } },
+      });
+      expect(subtitleTrack.clips).toHaveLength(2);
+      expect(subtitleTrack.clips[0]).toMatchObject({ startMs: 0, endMs: 6000 }); // 8~14 → 0~6
+
+      const script = await prisma.script.findUniqueOrThrow({ where: { projectId: project.id } });
+      expect(script.title).toBe("재해석 대본 제목");
+    } finally {
+      await prisma.timeline.deleteMany({ where: { projectId: project.id } });
+      await prisma.script.deleteMany({ where: { projectId: project.id } });
+      await prisma.project.delete({ where: { id: project.id } });
+      await prisma.channel.delete({ where: { id: channel.id } });
+    }
+  });
+
+  it("선정 구간이 없으면 에러", async () => {
+    const channel = await prisma.channel.create({ data: { name: "c", defaultSettings: {} } });
+    const project = await prisma.project.create({
+      data: { title: "x", channelId: channel.id, videoFormat: "SHORT", settings: {} },
+    });
+    try {
+      await expect(generateHighlightAssets(project.id)).rejects.toThrow("선정된 하이라이트 구간이 없습니다");
+      expect(generateScriptPattern).not.toHaveBeenCalled();
+    } finally {
+      await prisma.project.delete({ where: { id: project.id } });
+      await prisma.channel.delete({ where: { id: channel.id } });
     }
   });
 });
