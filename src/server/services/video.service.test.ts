@@ -11,6 +11,7 @@ import {
   concatVideoSegments,
   generateSilence,
   mixAudioTracks,
+  mixBgmIntoVideo,
   muxVideoAudio,
   prepareBgmAudio,
   trimOrPadAudioToDuration,
@@ -25,6 +26,7 @@ vi.mock("@/lib/ffmpeg", () => ({
   concatVideoSegments: vi.fn().mockResolvedValue(undefined),
   prepareBgmAudio: vi.fn().mockResolvedValue(undefined),
   mixAudioTracks: vi.fn().mockResolvedValue(undefined),
+  mixBgmIntoVideo: vi.fn().mockResolvedValue(undefined),
   muxVideoAudio: vi.fn().mockResolvedValue(undefined),
   generateSilence: vi.fn().mockResolvedValue(undefined),
   trimOrPadAudioToDuration: vi.fn().mockResolvedValue(undefined),
@@ -316,6 +318,55 @@ describe("renderVideo", () => {
       const updated = await prisma.project.findUniqueOrThrow({ where: { id: project.id } });
       expect(updated.status).toBe("RENDERED");
     } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("원본 오디오 모드 + BGM: TTS 뮤싱 대신 원본 오디오 위에 BGM을 덧믹싱한다", async () => {
+    const { channel, project } = await createProjectWithAssets({ audio: false, images: false });
+    try {
+      const bgmTrack = await prisma.bgmTrack.create({
+        data: { title: "덧믹싱 BGM", category: "calm", filePath: "bgm_2.mp3", source: "upload" },
+      });
+
+      await renderVideo(project.id).catch(() => undefined); // 타임라인 생성 목적
+
+      const timeline = await prisma.timeline.findUniqueOrThrow({ where: { projectId: project.id } });
+      const videoTrack = await prisma.timelineTrack.findFirstOrThrow({
+        where: { timelineId: timeline.id, type: "VIDEO" },
+      });
+      const media = await prisma.uploadedMedia.create({
+        data: { projectId: project.id, kind: "video", filePath: "uploads/hl.mp4", durationMs: 2000 },
+      });
+      await prisma.timelineClip.create({
+        data: { trackId: videoTrack.id, startMs: 0, endMs: 2000, zIndex: 0, payload: { label: "hl", mediaId: media.id, mediaKind: "video" } },
+      });
+      await prisma.timeline.update({ where: { id: timeline.id }, data: { durationMs: 2000 } });
+      await prisma.project.update({
+        where: { id: project.id },
+        data: {
+          settings: {
+            sourceVideo: { videoId: "v", url: "https://x", title: "t" },
+            bgm: { trackId: bgmTrack.id, volumeDb: -6, playbackSpeed: 1, loop: true },
+          },
+        },
+      });
+
+      vi.mocked(prepareBgmAudio).mockClear();
+      vi.mocked(mixBgmIntoVideo).mockClear();
+      vi.mocked(mixAudioTracks).mockClear();
+      vi.mocked(muxVideoAudio).mockClear();
+
+      await renderVideo(project.id);
+
+      // BGM은 준비하되, 원본 오디오 모드이므로 TTS 믹싱(mixAudioTracks)/뮤싱(muxVideoAudio)이 아니라
+      // 영상 원본 오디오 위 덧믹싱(mixBgmIntoVideo)을 사용한다.
+      expect(prepareBgmAudio).toHaveBeenCalledTimes(1);
+      expect(mixBgmIntoVideo).toHaveBeenCalledTimes(1);
+      expect(mixAudioTracks).not.toHaveBeenCalled();
+      expect(muxVideoAudio).not.toHaveBeenCalled();
+    } finally {
+      await prisma.bgmTrack.deleteMany({ where: { title: "덧믹싱 BGM" } });
       await cleanup(project.id, channel.id);
     }
   });

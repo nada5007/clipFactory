@@ -1,7 +1,10 @@
+import { readFile } from "node:fs/promises";
+
 import { generateScriptPattern, selectEngagingSegments, type EngagingSegment } from "@/lib/clients/anthropic";
-import { buildVideoSegmentClip } from "@/lib/ffmpeg";
+import { buildVideoSegmentClip, extractVideoFrame } from "@/lib/ffmpeg";
 import { prisma } from "@/lib/prisma";
 import { ensureProjectDir, resolveProjectFilePath } from "@/lib/storage";
+import { resolveThumbnailResolution } from "@/lib/thumbnail";
 import { formatCuesForPrompt, parseTranscript, retimeCuesToTimeline, type TranscriptCue } from "@/lib/transcript";
 import { resolveVideoResolution } from "@/lib/video";
 import { downloadVideo, fetchAutoSubtitles } from "@/lib/ytdlp";
@@ -233,4 +236,49 @@ export async function generateHighlightAssets(projectId: string): Promise<Highli
   });
 
   return { subtitleCount: retimed.length, scriptTitle: generated.title };
+}
+
+export type HighlightThumbnailFrameResult = {
+  frameDataUrl: string;
+  hook: string;
+  width: number;
+  height: number;
+};
+
+// PROJECT_SPEC.md §2.5 "채널 분석 → 프로젝트 (Phase 4)": 하이라이트 영상 클립에서 대표 프레임 한 장을
+// 뽑고 AI 대본의 후킹 문구(Script.hook)를 함께 돌려준다. 텍스트 합성 자체는 한글 폰트 이슈를 피하기
+// 위해 브라우저 캔버스(클라이언트)에서 수행하고, 완성 이미지는 기존 썸네일 저장 경로로 업로드된다.
+export async function generateHighlightThumbnailFrame(projectId: string): Promise<HighlightThumbnailFrameResult> {
+  const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } });
+
+  const timeline = await prisma.timeline.findUnique({ where: { projectId } });
+  if (!timeline) throw new Error("타임라인이 없습니다. 먼저 '영상 트랙 만들기'를 실행해주세요.");
+  const videoTrack = await prisma.timelineTrack.findFirst({ where: { timelineId: timeline.id, type: "VIDEO" } });
+  const clip = videoTrack
+    ? await prisma.timelineClip.findFirst({ where: { trackId: videoTrack.id }, orderBy: { startMs: "asc" } })
+    : null;
+  if (!clip) {
+    throw new Error("하이라이트 영상 클립이 없습니다. 먼저 '영상 트랙 만들기'를 실행해주세요.");
+  }
+
+  const payload = (clip.payload && typeof clip.payload === "object" ? clip.payload : {}) as Record<string, unknown>;
+  const mediaId = payload.mediaId as string | undefined;
+  if (!mediaId) throw new Error("하이라이트 클립의 미디어 정보를 찾을 수 없습니다.");
+  const media = await prisma.uploadedMedia.findUniqueOrThrow({ where: { id: mediaId } });
+
+  // 클립 중간 지점 프레임을 뽑는다 — 도입/전환 프레임을 피해 대표성이 높은 장면을 고른다.
+  const midSec = Math.max(0, (clip.endMs - clip.startMs) / 2 / 1000);
+  await ensureProjectDir(projectId, "thumbnail");
+  const framePath = resolveProjectFilePath(projectId, "thumbnail/highlight_frame.png");
+  await extractVideoFrame(resolveProjectFilePath(projectId, media.filePath), midSec, framePath);
+
+  const buffer = await readFile(framePath);
+  const frameDataUrl = `data:image/png;base64,${buffer.toString("base64")}`;
+
+  // 후킹 문구는 Phase 3b에서 만든 대본의 hook을 우선 사용하고, 없으면 프로젝트 제목으로 대체한다.
+  const script = await prisma.script.findUnique({ where: { projectId } });
+  const hook = script?.hook?.trim() || project.title;
+
+  const { width, height } = resolveThumbnailResolution(project.videoFormat);
+  return { frameDataUrl, hook, width, height };
 }

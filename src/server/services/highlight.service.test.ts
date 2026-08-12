@@ -8,11 +8,19 @@ import {
   analyzeProjectHighlights,
   buildHighlightVideoTrack,
   generateHighlightAssets,
+  generateHighlightThumbnailFrame,
 } from "@/server/services/highlight.service";
 
 vi.mock("@/lib/clients/anthropic", () => ({ selectEngagingSegments: vi.fn(), generateScriptPattern: vi.fn() }));
 vi.mock("@/lib/ytdlp", () => ({ fetchAutoSubtitles: vi.fn(), downloadVideo: vi.fn() }));
-vi.mock("@/lib/ffmpeg", () => ({ buildVideoSegmentClip: vi.fn() }));
+vi.mock("@/lib/ffmpeg", () => ({
+  buildVideoSegmentClip: vi.fn(),
+  // 실제 ffmpeg 대신 출력 경로에 더미 프레임 파일을 써서 후속 readFile이 성공하게 한다.
+  extractVideoFrame: vi.fn(async (_video: string, _at: number, out: string) => {
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(out, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  }),
+}));
 
 const SAMPLE_VTT = `WEBVTT
 
@@ -267,6 +275,65 @@ describe("generateHighlightAssets", () => {
       await expect(generateHighlightAssets(project.id)).rejects.toThrow("선정된 하이라이트 구간이 없습니다");
       expect(generateScriptPattern).not.toHaveBeenCalled();
     } finally {
+      await prisma.project.delete({ where: { id: project.id } });
+      await prisma.channel.delete({ where: { id: channel.id } });
+    }
+  });
+});
+
+describe("generateHighlightThumbnailFrame", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("첫 VIDEO 클립에서 프레임을 추출하고 대본 hook을 문구로 돌려준다", async () => {
+    const channel = await prisma.channel.create({ data: { name: "c", defaultSettings: {} } });
+    const project = await prisma.project.create({
+      data: {
+        title: "썸네일 테스트",
+        channelId: channel.id,
+        videoFormat: "SHORT",
+        settings: { sourceVideo: { videoId: "v1", url: "https://youtu.be/v1", title: "원본" } },
+      },
+    });
+    try {
+      const timeline = await prisma.timeline.create({ data: { projectId: project.id, durationMs: 12000 } });
+      const track = await prisma.timelineTrack.create({
+        data: { timelineId: timeline.id, type: "VIDEO", name: "영상", order: 0, autoSync: true },
+      });
+      const media = await prisma.uploadedMedia.create({
+        data: { projectId: project.id, kind: "video", filePath: "uploads/hl_0.mp4", durationMs: 12000 },
+      });
+      await prisma.timelineClip.create({
+        data: { trackId: track.id, startMs: 0, endMs: 12000, payload: { label: "하이라이트 1", mediaId: media.id, mediaKind: "video" } },
+      });
+      await prisma.script.create({
+        data: { projectId: project.id, topic: "원본", title: "t", hook: "이걸 몰랐다니!", body: "b", imagePrompts: [], model: "claude" },
+      });
+
+      const result = await generateHighlightThumbnailFrame(project.id);
+
+      expect(result.hook).toBe("이걸 몰랐다니!");
+      expect(result.width).toBe(1080);
+      expect(result.height).toBe(1920);
+      expect(result.frameDataUrl.startsWith("data:image/png;base64,")).toBe(true);
+    } finally {
+      await prisma.script.deleteMany({ where: { projectId: project.id } });
+      await prisma.timeline.deleteMany({ where: { projectId: project.id } });
+      await prisma.uploadedMedia.deleteMany({ where: { projectId: project.id } });
+      await prisma.project.delete({ where: { id: project.id } });
+      await prisma.channel.delete({ where: { id: channel.id } });
+    }
+  });
+
+  it("VIDEO 클립이 없으면 안내 에러를 던진다", async () => {
+    const channel = await prisma.channel.create({ data: { name: "c", defaultSettings: {} } });
+    const project = await prisma.project.create({
+      data: { title: "x", channelId: channel.id, videoFormat: "SHORT", settings: {} },
+    });
+    try {
+      await prisma.timeline.create({ data: { projectId: project.id, durationMs: 0 } });
+      await expect(generateHighlightThumbnailFrame(project.id)).rejects.toThrow("하이라이트 영상 클립이 없습니다");
+    } finally {
+      await prisma.timeline.deleteMany({ where: { projectId: project.id } });
       await prisma.project.delete({ where: { id: project.id } });
       await prisma.channel.delete({ where: { id: channel.id } });
     }

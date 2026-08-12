@@ -261,6 +261,49 @@ export async function extractAudioTrack(videoPath: string, outputPath: string): 
   }
 }
 
+// 영상의 원본 오디오 위에 (이미 가공된) BGM을 덧믹싱한다. 영상 스트림은 그대로 복사하고
+// 오디오만 amix로 합친다. normalize=0으로 원본 오디오 음량이 BGM 유무와 무관하게 유지된다.
+// 원본 오디오 유지 모드(내레이션 없는 하이라이트 프로젝트)에서 BGM을 얹을 때 사용한다.
+export async function mixBgmIntoVideo(videoPath: string, bgmPath: string, outputPath: string): Promise<void> {
+  await execFileAsync(FFMPEG_BIN, [
+    "-y",
+    "-i",
+    videoPath,
+    "-i",
+    bgmPath,
+    "-filter_complex",
+    "[0:a][1:a]amix=inputs=2:duration=first:normalize=0[a]",
+    "-map",
+    "0:v",
+    "-map",
+    "[a]",
+    "-c:v",
+    "copy",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "192k",
+    outputPath,
+  ]);
+}
+
+// 영상의 특정 시점(atSec) 프레임 한 장을 이미지 파일로 추출한다. 하이라이트 후킹 썸네일의
+// 배경 프레임으로 사용한다(-frames:v 1로 한 프레임만).
+export async function extractVideoFrame(videoPath: string, atSec: number, outputPath: string): Promise<void> {
+  await execFileAsync(FFMPEG_BIN, [
+    "-y",
+    "-ss",
+    String(Math.max(0, atSec)),
+    "-i",
+    videoPath,
+    "-frames:v",
+    "1",
+    "-q:v",
+    "2",
+    outputPath,
+  ]);
+}
+
 // ffmpeg-full(libass 포함) 빌드가 필요하다 — 기본 ffmpeg 포뮬러에는 ass/subtitles 필터가 없다.
 export async function burnSubtitles(inputVideoPath: string, assPath: string, outputPath: string): Promise<void> {
   const dir = path.dirname(assPath);

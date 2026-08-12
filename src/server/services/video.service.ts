@@ -7,6 +7,7 @@ import {
   concatVideoSegments,
   generateSilence,
   mixAudioTracks,
+  mixBgmIntoVideo,
   muxVideoAudio,
   prepareBgmAudio,
   trimOrPadAudioToDuration,
@@ -186,28 +187,42 @@ export async function renderVideo(projectId: string, onProgress?: JobProgressRep
     await concatVideoSegments(visualPartPaths, resolveProjectFilePath(projectId, "tmp/visual_concat.txt"), videoOnlyPath);
     await onProgress?.(45, "BGM 믹싱 중");
 
-    // 자막을 입힐 대상 영상. 원본 오디오 모드에서는 이어붙인 영상이 이미 원본 소리를 갖고 있어 그대로 쓴다.
+    // 프로젝트 유효 BGM 설정(프로젝트 우선, 없으면 채널 기본값)을 미리 가공해 둔다 — 미리보기
+    // 재생(playBgmFrom)이 참조하는 것과 동일한 프로젝트 단위 설정을 그대로 쓴다.
+    let bgmPreparedPath: string | null = null;
+    const effectiveBgm = await getEffectiveBgmSettings(projectId);
+    if (effectiveBgm.settings?.trackId) {
+      const bgmTrack = await getBgmTrack(effectiveBgm.settings.trackId);
+      if (bgmTrack) {
+        bgmPreparedPath = resolveProjectFilePath(projectId, "tmp/bgm_prepared.mp3");
+        const volumeLinear = Math.max(0, 10 ** (effectiveBgm.settings.volumeDb / 20));
+        await prepareBgmAudio(
+          resolveBgmTrackPath(bgmTrack),
+          { volumeLinear, playbackSpeed: effectiveBgm.settings.playbackSpeed, loop: effectiveBgm.settings.loop },
+          totalDurationMs / 1000,
+          bgmPreparedPath,
+        );
+      }
+    }
+
+    // 자막을 입힐 대상 영상.
     let videoForSubtitles = videoOnlyPath;
-    if (!sourceAudioMode) {
-      // 프로젝트 유효 BGM 설정(프로젝트 우선, 없으면 채널 기본값)이 있으면 TTS 음성에 섞는다 — 미리보기
-      // 재생(playBgmFrom)이 참조하는 것과 동일한 프로젝트 단위 설정을 그대로 쓴다.
+    if (sourceAudioMode) {
+      // 원본 오디오 유지 모드: 이어붙인 영상이 이미 원본 소리를 갖고 있다. BGM이 설정돼 있으면
+      // 원본 오디오를 덮지 않고 그 위에 덧믹싱한다(내레이션은 없고 원본 소리 + BGM).
+      if (bgmPreparedPath) {
+        await onProgress?.(70, "원본 오디오 위 BGM 덧믹싱 중");
+        const videoWithBgmPath = resolveProjectFilePath(projectId, "video_bgm.mp4");
+        await mixBgmIntoVideo(videoOnlyPath, bgmPreparedPath, videoWithBgmPath);
+        videoForSubtitles = videoWithBgmPath;
+      }
+    } else {
+      // TTS 음성 트랙에 BGM을 섞은 뒤 영상과 합성한다.
       let finalAudioPath = audioFullPath!;
-      const effectiveBgm = await getEffectiveBgmSettings(projectId);
-      if (effectiveBgm.settings?.trackId) {
-        const bgmTrack = await getBgmTrack(effectiveBgm.settings.trackId);
-        if (bgmTrack) {
-          const bgmPreparedPath = resolveProjectFilePath(projectId, "tmp/bgm_prepared.mp3");
-          const volumeLinear = Math.max(0, 10 ** (effectiveBgm.settings.volumeDb / 20));
-          await prepareBgmAudio(
-            resolveBgmTrackPath(bgmTrack),
-            { volumeLinear, playbackSpeed: effectiveBgm.settings.playbackSpeed, loop: effectiveBgm.settings.loop },
-            totalDurationMs / 1000,
-            bgmPreparedPath,
-          );
-          const mixedPath = resolveProjectFilePath(projectId, "audio_mixed.mp3");
-          await mixAudioTracks(audioFullPath!, bgmPreparedPath, mixedPath);
-          finalAudioPath = mixedPath;
-        }
+      if (bgmPreparedPath) {
+        const mixedPath = resolveProjectFilePath(projectId, "audio_mixed.mp3");
+        await mixAudioTracks(audioFullPath!, bgmPreparedPath, mixedPath);
+        finalAudioPath = mixedPath;
       }
       await onProgress?.(70, "영상과 음성 합성 중");
 
