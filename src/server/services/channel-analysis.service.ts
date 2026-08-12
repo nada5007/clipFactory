@@ -1,6 +1,13 @@
 import { parseChannelInput } from "@/lib/channel-input";
 import { analyzeChannelVideos, type ScannedVideo } from "@/lib/channel-scan";
-import { getChannel, listPlaylistItems, listVideos, searchChannels, type YoutubeChannel } from "@/lib/clients/youtube";
+import {
+  getChannel,
+  listChannelPlaylists,
+  listPlaylistItems,
+  listVideos,
+  searchChannels,
+  type YoutubeChannel,
+} from "@/lib/clients/youtube";
 import { scanPeriodCutoffMs, SCAN_PERIOD_DEFAULT, type ScanPeriod } from "@/lib/scan-period";
 
 // UI_SPEC.md §7.1 "전수 스캔": 채널 규모에 따라 수 분 소요될 수 있어 상한을 둔다. 기간 드롭다운 도입 후
@@ -89,4 +96,67 @@ export async function scanChannel(input: string, period: ScanPeriod = SCAN_PERIO
     period,
     analysis: analyzeChannelVideos(scannedVideos),
   };
+}
+
+// featured 카테고리(재생목록 섹션) 재현: 채널이 만든 재생목록을 홈 화면처럼 카테고리 캐러셀로 보여준다.
+// 쿼터·시간 보호를 위해 상위 재생목록 수와 재생목록당 영상 수에 상한을 둔다.
+const MAX_SECTIONS = 12;
+const VIDEOS_PER_SECTION = 12;
+
+export type ChannelSection = {
+  playlistId: string;
+  title: string;
+  itemCount: number;
+  videos: ScannedVideo[];
+};
+
+export type ChannelSectionsReport = {
+  channelId: string;
+  sections: ChannelSection[];
+};
+
+export async function getChannelSections(channelId: string): Promise<ChannelSectionsReport> {
+  const playlistPage = await listChannelPlaylists(channelId);
+  const playlists = playlistPage.items.filter((p) => p.contentDetails.itemCount > 0).slice(0, MAX_SECTIONS);
+
+  // 각 재생목록의 앞쪽 영상 ID를 모은다(재생목록 순서 보존).
+  const perPlaylistVideoIds = new Map<string, string[]>();
+  for (const playlist of playlists) {
+    const items = await listPlaylistItems(playlist.id);
+    perPlaylistVideoIds.set(
+      playlist.id,
+      items.items.map((i) => i.contentDetails.videoId).slice(0, VIDEOS_PER_SECTION),
+    );
+  }
+
+  // 여러 재생목록에 겹쳐 나올 수 있으므로 videoId를 한 번에 모아 통계를 조회한다(dedupe).
+  const uniqueIds = Array.from(new Set(Array.from(perPlaylistVideoIds.values()).flat()));
+  const detailById = new Map<string, ScannedVideo>();
+  for (let i = 0; i < uniqueIds.length; i += VIDEOS_BATCH_SIZE) {
+    const batch = uniqueIds.slice(i, i + VIDEOS_BATCH_SIZE);
+    if (batch.length === 0) continue;
+    const videosResult = await listVideos(batch);
+    for (const v of videosResult.items) {
+      detailById.set(v.id, {
+        videoId: v.id,
+        title: v.snippet.title,
+        viewCount: Number(v.statistics.viewCount ?? 0),
+        publishedAt: v.snippet.publishedAt,
+        thumbnailUrl: v.snippet.thumbnails?.medium?.url,
+      });
+    }
+  }
+
+  const sections: ChannelSection[] = playlists
+    .map((playlist) => ({
+      playlistId: playlist.id,
+      title: playlist.snippet.title,
+      itemCount: playlist.contentDetails.itemCount,
+      videos: (perPlaylistVideoIds.get(playlist.id) ?? [])
+        .map((id) => detailById.get(id))
+        .filter((v): v is ScannedVideo => Boolean(v)),
+    }))
+    .filter((s) => s.videos.length > 0);
+
+  return { channelId, sections };
 }

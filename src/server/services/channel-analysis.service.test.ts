@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getChannel, listPlaylistItems, listVideos, searchChannels } from "@/lib/clients/youtube";
-import { resolveChannel, scanChannel } from "@/server/services/channel-analysis.service";
+import { getChannel, listChannelPlaylists, listPlaylistItems, listVideos, searchChannels } from "@/lib/clients/youtube";
+import { getChannelSections, resolveChannel, scanChannel } from "@/server/services/channel-analysis.service";
 
 vi.mock("@/lib/clients/youtube", async () => {
   const actual = await vi.importActual<typeof import("@/lib/clients/youtube")>("@/lib/clients/youtube");
@@ -9,6 +9,7 @@ vi.mock("@/lib/clients/youtube", async () => {
     ...actual,
     getChannel: vi.fn(),
     searchChannels: vi.fn(),
+    listChannelPlaylists: vi.fn(),
     listPlaylistItems: vi.fn(),
     listVideos: vi.fn(),
   };
@@ -130,5 +131,44 @@ describe("scanChannel", () => {
     expect(listVideos).toHaveBeenCalledWith(["v1", "v2"]);
     expect(report.scannedCount).toBe(2);
     expect(report.period).toBe("7d");
+  });
+});
+
+describe("getChannelSections", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("재생목록별로 앞쪽 영상을 모아 섹션을 구성하고 빈 재생목록은 제외한다", async () => {
+    vi.mocked(listChannelPlaylists).mockResolvedValue({
+      items: [
+        { id: "PL1", snippet: { title: "핫 클립" }, contentDetails: { itemCount: 25 } },
+        { id: "PL2", snippet: { title: "라이브" }, contentDetails: { itemCount: 3 } },
+        { id: "PLempty", snippet: { title: "빈 목록" }, contentDetails: { itemCount: 0 } }, // 제외
+      ],
+    });
+    vi.mocked(listPlaylistItems).mockImplementation(async (playlistId: string) => {
+      if (playlistId === "PL1") {
+        return { items: [{ contentDetails: { videoId: "a" } }, { contentDetails: { videoId: "b" } }] };
+      }
+      return { items: [{ contentDetails: { videoId: "b" } }, { contentDetails: { videoId: "c" } }] }; // b 겹침(dedupe 확인)
+    });
+    vi.mocked(listVideos).mockResolvedValue({
+      items: ["a", "b", "c"].map((id) => ({
+        id,
+        snippet: { title: `제목 ${id}`, channelId: "UC123", channelTitle: "c", publishedAt: "2026-01-01T00:00:00Z", thumbnails: { medium: { url: `t/${id}` } } },
+        statistics: { viewCount: "500" },
+      })),
+    });
+
+    const report = await getChannelSections("UC123");
+
+    // itemCount>0인 2개 재생목록만, 빈 목록(PLempty)은 listPlaylistItems 호출 대상도 아님.
+    expect(listPlaylistItems).toHaveBeenCalledTimes(2);
+    // 겹치는 videoId는 한 번만 조회(dedupe): a,b,c.
+    expect(listVideos).toHaveBeenCalledWith(["a", "b", "c"]);
+    expect(report.channelId).toBe("UC123");
+    expect(report.sections).toHaveLength(2);
+    expect(report.sections[0]).toMatchObject({ playlistId: "PL1", title: "핫 클립", itemCount: 25 });
+    expect(report.sections[0].videos.map((v) => v.videoId)).toEqual(["a", "b"]);
+    expect(report.sections[1].videos.map((v) => v.videoId)).toEqual(["b", "c"]);
   });
 });

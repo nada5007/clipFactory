@@ -14,6 +14,7 @@ const QUOTA_COST = {
   search: 100,
   videos: 1,
   channels: 1,
+  playlists: 1,
   playlistItems: 1,
   commentThreads: 1,
 } as const;
@@ -180,6 +181,22 @@ export function searchChannels(query: string) {
 
 export type YoutubePlaylistItem = { contentDetails: { videoId: string; videoPublishedAt?: string } };
 export type YoutubePlaylistItemsResponse = { items: YoutubePlaylistItem[]; nextPageToken?: string };
+
+export type YoutubeChannelPlaylist = {
+  id: string;
+  snippet: { title: string; thumbnails?: { medium?: { url: string } } };
+  contentDetails: { itemCount: number };
+};
+export type YoutubeChannelPlaylistsResponse = { items: YoutubeChannelPlaylist[]; nextPageToken?: string };
+
+// UI_SPEC.md §7.1 채널 분석 — featured 카테고리 재현: 채널이 만든 재생목록(=홈 화면 카테고리 캐러셀)을 조회한다.
+export function listChannelPlaylists(channelId: string, pageToken?: string) {
+  return callYoutubeApi<YoutubeChannelPlaylistsResponse>(
+    "playlists",
+    { part: "snippet,contentDetails", channelId, maxResults: "50", ...(pageToken ? { pageToken } : {}) },
+    VIDEOS_TTL_SECONDS,
+  );
+}
 
 // UI_SPEC.md §7.1 채널 분석 "전수 스캔": uploads 플레이리스트 페이지네이션(50개/page).
 export function listPlaylistItems(playlistId: string, pageToken?: string) {

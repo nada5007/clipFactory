@@ -19,11 +19,24 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { SCAN_PERIOD_DEFAULT, SCAN_PERIOD_OPTIONS, scanPeriodLabel, type ScanPeriod } from "@/lib/scan-period";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import type { ScannedVideoWithRatio } from "@/lib/channel-scan";
-import type { ChannelScanReport } from "@/server/services/channel-analysis.service";
+import type { ChannelScanReport, ChannelSectionsReport } from "@/server/services/channel-analysis.service";
 
 const numberFormat = new Intl.NumberFormat("ko-KR");
 const DAY_LABELS = ["일", "월", "화", "수", "목", "금", "토"];
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
+
+// "2개월 전"처럼 대략적인 상대 시간을 한국어로 만든다(유튜브 featured 카드와 동일한 표기).
+function relativeTime(publishedAt: string): string {
+  const diffMs = Date.now() - new Date(publishedAt).getTime();
+  const day = 24 * 60 * 60 * 1000;
+  if (diffMs < day) return "오늘";
+  const years = Math.floor(diffMs / (365 * day));
+  if (years >= 1) return `${years}년 전`;
+  const months = Math.floor(diffMs / (30 * day));
+  if (months >= 1) return `${months}개월 전`;
+  const days = Math.floor(diffMs / day);
+  return `${days}일 전`;
+}
 
 function youtubeWatchUrl(videoId: string) {
   return `https://www.youtube.com/watch?v=${videoId}`;
@@ -91,6 +104,70 @@ function Heatmap({ heatmap }: { heatmap: ChannelScanReport["analysis"]["heatmap"
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// featured 카테고리(재생목록 섹션) 재현: 채널 홈처럼 재생목록별 가로 스크롤 캐러셀로 보여준다.
+function ChannelSections({ channelId }: { channelId: string }) {
+  const [report, setReport] = usePersistedState<ChannelSectionsReport | null>("insight:channel:sections", null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!channelId) return;
+    // 이미 같은 채널의 섹션을 불러온 상태면 재조회하지 않는다(내비게이션 복원 + 쿼터 절약).
+    if (report?.channelId === channelId) return;
+    setLoading(true);
+    setError(null);
+    fetch(`/api/insight/channel/sections?${new URLSearchParams({ channelId }).toString()}`)
+      .then(async (res) => {
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error ?? "채널 카테고리를 불러오지 못했습니다.");
+        setReport(body);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "채널 카테고리를 불러오지 못했습니다."))
+      .finally(() => setLoading(false));
+    // report는 의존성에서 제외(무한 루프 방지) — channelId 변경 시에만 재조회.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelId]);
+
+  if (loading) return <p className="text-sm text-muted-foreground">채널 카테고리 불러오는 중...</p>;
+  if (error) return <p className="text-sm text-destructive">{error}</p>;
+  if (!report || report.channelId !== channelId || report.sections.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-6">
+      <h3 className="text-sm font-semibold">채널 카테고리 (재생목록)</h3>
+      {report.sections.map((section) => (
+        <div key={section.playlistId} className="flex flex-col gap-2">
+          <div className="flex items-baseline gap-2">
+            <h4 className="text-sm font-semibold">{section.title}</h4>
+            <span className="text-xs text-muted-foreground">{numberFormat.format(section.itemCount)}개</span>
+          </div>
+          <div className="flex gap-3 overflow-x-auto pb-2">
+            {section.videos.map((video) => (
+              <div key={video.videoId} className="flex w-40 shrink-0 flex-col gap-1 overflow-hidden rounded-lg border bg-card">
+                <VideoThumb thumbnailUrl={video.thumbnailUrl} title={video.title} videoId={video.videoId} />
+                <div className="flex flex-col gap-0.5 px-2 pb-2">
+                  <a
+                    href={youtubeWatchUrl(video.videoId)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="line-clamp-2 text-xs font-medium hover:text-primary hover:underline"
+                    title={video.title}
+                  >
+                    {video.title}
+                  </a>
+                  <p className="text-[11px] text-muted-foreground">
+                    조회수 {numberFormat.format(video.viewCount)}회 · {relativeTime(video.publishedAt)}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -317,6 +394,8 @@ export function ChannelAnalysisClient() {
               {channelSaved ? "채널 저장됨" : "채널 저장"}
             </Button>
           </div>
+
+          <ChannelSections channelId={report.channel.id} />
 
           <div>
             <h3 className="text-sm font-semibold">인기 영상 TOP 10 ({scanPeriodLabel(report.period ?? SCAN_PERIOD_DEFAULT)})</h3>
