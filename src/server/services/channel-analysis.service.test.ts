@@ -99,5 +99,36 @@ describe("scanChannel", () => {
     expect(listVideos).toHaveBeenCalledWith(["v1", "v2", "v3"]);
     expect(report.scannedCount).toBe(3);
     expect(report.analysis.videoCount).toBe(3);
+    expect(report.period).toBe("10d"); // 기본값
+  });
+
+  it("기간(period)을 넘기면 컷오프보다 오래된 업로드를 만나는 즉시 스캔을 멈춘다", async () => {
+    const nowIso = new Date().toISOString();
+    const oldIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(); // 30일 전
+
+    vi.mocked(getChannel).mockResolvedValue({ items: [fakeChannel()] });
+    vi.mocked(listPlaylistItems).mockResolvedValueOnce({
+      items: [
+        { contentDetails: { videoId: "v1", videoPublishedAt: nowIso } },
+        { contentDetails: { videoId: "v2", videoPublishedAt: nowIso } },
+        { contentDetails: { videoId: "v3", videoPublishedAt: oldIso } }, // 7일 컷오프 밖 → 여기서 멈춤
+      ],
+      nextPageToken: "page2",
+    });
+    vi.mocked(listVideos).mockResolvedValue({
+      items: ["v1", "v2"].map((id) => ({
+        id,
+        snippet: { title: id, channelId: "UC123", channelTitle: "c", publishedAt: nowIso },
+        statistics: { viewCount: "100" },
+      })),
+    });
+
+    const report = await scanChannel("UC" + "1".repeat(22), "7d");
+
+    // v3(30일 전)에서 멈췄으므로 v1,v2만 수집하고 다음 페이지는 요청하지 않는다.
+    expect(listPlaylistItems).toHaveBeenCalledTimes(1);
+    expect(listVideos).toHaveBeenCalledWith(["v1", "v2"]);
+    expect(report.scannedCount).toBe(2);
+    expect(report.period).toBe("7d");
   });
 });

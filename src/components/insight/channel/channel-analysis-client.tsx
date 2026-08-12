@@ -16,6 +16,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SCAN_PERIOD_DEFAULT, SCAN_PERIOD_OPTIONS, scanPeriodLabel, type ScanPeriod } from "@/lib/scan-period";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import type { ScannedVideoWithRatio } from "@/lib/channel-scan";
 import type { ChannelScanReport } from "@/server/services/channel-analysis.service";
@@ -96,6 +97,7 @@ function Heatmap({ heatmap }: { heatmap: ChannelScanReport["analysis"]["heatmap"
 
 export function ChannelAnalysisClient() {
   const [input, setInput] = usePersistedState("insight:channel:input", "");
+  const [period, setPeriod] = usePersistedState<ScanPeriod>("insight:channel:period", SCAN_PERIOD_DEFAULT);
   const [report, setReport] = usePersistedState<ChannelScanReport | null>("insight:channel:report", null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -225,7 +227,7 @@ export function ChannelAnalysisClient() {
     });
   };
 
-  const runScan = () => {
+  const runScan = (scanPeriod: ScanPeriod = period) => {
     const trimmed = input.trim();
     if (!trimmed) {
       setError("채널 URL, ID, 핸들 또는 이름을 입력하세요.");
@@ -237,7 +239,7 @@ export function ChannelAnalysisClient() {
     setSelectedIds(new Set());
     setCreatedCount(0);
 
-    fetch(`/api/insight/channel/scan?${new URLSearchParams({ channel: trimmed }).toString()}`)
+    fetch(`/api/insight/channel/scan?${new URLSearchParams({ channel: trimmed, period: scanPeriod }).toString()}`)
       .then(async (res) => {
         const body = await res.json();
         if (!res.ok) throw new Error(body.error ?? "채널을 분석하지 못했습니다.");
@@ -256,7 +258,7 @@ export function ChannelAnalysisClient() {
         </p>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <Input
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -264,7 +266,26 @@ export function ChannelAnalysisClient() {
           placeholder="예: @veritasium 또는 채널 URL"
           className="max-w-sm"
         />
-        <Button onClick={runScan} disabled={loading}>
+        <Select
+          value={period}
+          onValueChange={(v) => {
+            const next = v as ScanPeriod;
+            setPeriod(next);
+            if (report && input.trim()) runScan(next); // 이미 분석한 상태면 기간 변경 시 즉시 재분석
+          }}
+        >
+          <SelectTrigger className="w-36">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SCAN_PERIOD_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button onClick={() => runScan()} disabled={loading}>
           {loading ? "분석 중..." : "분석"}
         </Button>
       </div>
@@ -298,7 +319,11 @@ export function ChannelAnalysisClient() {
           </div>
 
           <div>
-            <h3 className="mb-2 text-sm font-semibold">인기 영상 TOP 10</h3>
+            <h3 className="text-sm font-semibold">인기 영상 TOP 10 ({scanPeriodLabel(report.period ?? SCAN_PERIOD_DEFAULT)})</h3>
+            <p className="mb-2 text-xs text-muted-foreground">
+              ※ 채널 역대 전체가 아니라 <b>선택 기간 내 업로드</b> 중 조회수 상위입니다(유튜브 &lsquo;인기순&rsquo;과 다를 수
+              있음). 더 넓게 보려면 위 기간을 늘려주세요.
+            </p>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
               {report.analysis.topVideos.map((video) => (
                 <div key={video.videoId} className="flex flex-col gap-1 overflow-hidden rounded-lg border bg-card">
@@ -325,14 +350,14 @@ export function ChannelAnalysisClient() {
           <div>
             <div className="mb-2 flex items-center justify-between gap-2">
               <h3 className="text-sm font-semibold">
-                전체 영상 스캔 — 최근 {numberFormat.format(report.scannedCount)}개 중 median 대비 3배 이상 떡상 {report.analysis.surgedVideos.length}개
+                전체 영상 스캔 — {scanPeriodLabel(report.period ?? SCAN_PERIOD_DEFAULT)} 업로드 {numberFormat.format(report.scannedCount)}개 중 median 대비 3배 이상 떡상 {report.analysis.surgedVideos.length}개
               </h3>
               <Button size="sm" disabled={selectedIds.size === 0} onClick={openCreateDialog}>
                 프로젝트 생성{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}
               </Button>
             </div>
             <p className="mb-2 text-xs text-muted-foreground">
-              중앙값 조회수 {numberFormat.format(report.analysis.medianViewCount)}회
+              중앙값 조회수 {numberFormat.format(report.analysis.medianViewCount)}회 (선택 기간 내 업로드 기준선 — 이 값 대비 3배↑가 &lsquo;떡상&rsquo;)
             </p>
             {report.analysis.surgedVideos.length === 0 ? (
               <p className="py-4 text-sm text-muted-foreground">median 대비 3배 이상 떡상한 영상이 없습니다.</p>
