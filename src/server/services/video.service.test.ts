@@ -267,7 +267,54 @@ describe("renderVideo", () => {
         1920,
         expect.any(String),
         undefined,
+        false, // 이미지도 있어 원본 오디오 모드 아님 → keepAudio=false
       );
+    } finally {
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("원본 오디오 모드: TTS 없이 VIDEO 클립만 있으면 클립 오디오를 유지해 렌더한다", async () => {
+    const { channel, project } = await createProjectWithAssets({ audio: false, images: false });
+    try {
+      await renderVideo(project.id).catch(() => undefined); // 타임라인 생성 목적(자산 없어 실패해도 무방)
+
+      const timeline = await prisma.timeline.findUniqueOrThrow({ where: { projectId: project.id } });
+      const videoTrack = await prisma.timelineTrack.findFirstOrThrow({
+        where: { timelineId: timeline.id, type: "VIDEO" },
+      });
+      const media = await prisma.uploadedMedia.create({
+        data: { projectId: project.id, kind: "video", filePath: "uploads/hl.mp4", durationMs: 2000 },
+      });
+      await prisma.timelineClip.create({
+        data: { trackId: videoTrack.id, startMs: 0, endMs: 2000, zIndex: 0, payload: { label: "hl", mediaId: media.id, mediaKind: "video" } },
+      });
+      await prisma.timeline.update({ where: { id: timeline.id }, data: { durationMs: 2000 } });
+
+      vi.mocked(buildVideoSegmentClip).mockClear();
+      vi.mocked(muxVideoAudio).mockClear();
+      vi.mocked(concatAudioFiles).mockClear();
+
+      const video = await renderVideo(project.id);
+
+      // 원본 오디오 모드: 비디오 세그먼트를 keepAudio=true로 만들고, TTS 오디오 합성/뮤싱은 하지 않는다.
+      expect(buildVideoSegmentClip).toHaveBeenCalledWith(
+        expect.stringContaining("hl.mp4"),
+        0,
+        2,
+        1080,
+        1920,
+        expect.any(String), // 출력 경로
+        undefined, // colorFilter 없음
+        true, // keepAudio (원본 오디오 유지)
+      );
+      expect(concatAudioFiles).not.toHaveBeenCalled();
+      expect(muxVideoAudio).not.toHaveBeenCalled();
+      expect(burnSubtitles).toHaveBeenCalledTimes(1);
+      expect(video.durationMs).toBe(2000);
+
+      const updated = await prisma.project.findUniqueOrThrow({ where: { id: project.id } });
+      expect(updated.status).toBe("RENDERED");
     } finally {
       await cleanup(project.id, channel.id);
     }

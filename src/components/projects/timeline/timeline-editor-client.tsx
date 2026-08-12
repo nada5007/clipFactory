@@ -633,6 +633,9 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   const previewVisual = maskEditOverride ?? findClipAtMsByPriority(timeline?.tracks ?? [], ["VIDEO", "IMAGE"], playheadMs);
   const previewVideoClip = previewVisual?.trackType === "VIDEO" ? previewVisual.clip : null;
   const previewImageClip = previewVisual?.trackType === "IMAGE" ? previewVisual.clip : null;
+  // TTS 내레이션이 없는 프로젝트(예: 채널 분석 하이라이트 — 원본 오디오 유지)에서는 비디오 클립의
+  // 원본 소리를 그대로 재생한다. TTS가 있으면 소리가 겹치므로 비디오는 음소거한다.
+  const hasTtsClips = (timeline?.tracks.find((t) => t.type === "TTS")?.clips.length ?? 0) > 0;
   const previewSubtitleClip = findClipAtMsByPriority(timeline?.tracks ?? [], ["SUBTITLE"], playheadMs)?.clip ?? null;
   // 스타일 탭에서 설정한 폰트/크기/색상/배경/위치/테두리가 실제 렌더링(ASS 번인)과 동일하게 반영되도록,
   // 하드코딩된 스타일 대신 resolveSubtitleStyle 결과를 그대로 쓴다.
@@ -715,6 +718,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     if (ttsAudioRef.current) ttsAudioRef.current.volume = previewVolume;
+    if (previewVideoRef.current) previewVideoRef.current.volume = previewVolume;
   }, [previewVolume]);
 
   function playTtsFrom(atMs: number) {
@@ -1421,10 +1425,8 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                     src={`/api/projects/${projectId}/media/${previewVideoClip.payload.mediaId}/file`}
                     className="size-full object-cover"
                     style={{ filter: previewVideoFilter || undefined }}
-                    // 비디오 자체 오디오는 항상 음소거한다 — 소리는 업로드 시 자동으로 만들어지는 "비디오
-                    // 오디오" 트랙의 별도 클립이 담당하는 구조다(다만 그 트랙의 실제 재생 연결은 아직
-                    // 미구현 — TTS/BGM만 실제로 재생되는 기존 범위와 동일한 디스클로저).
-                    muted
+                    // TTS 내레이션이 있으면 소리 겹침을 막기 위해 음소거, 없으면(하이라이트 등) 원본 오디오 재생.
+                    muted={hasTtsClips}
                     playsInline
                   />
                 ) : previewImageClip?.payload.sourceId ? (
