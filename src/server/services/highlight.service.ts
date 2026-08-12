@@ -1,5 +1,7 @@
 import { readFile } from "node:fs/promises";
 
+import { Prisma } from "@prisma/client";
+
 import { generateScriptPattern, selectEngagingSegments, type EngagingSegment } from "@/lib/clients/anthropic";
 import { buildVideoSegmentClip, extractVideoFrame } from "@/lib/ffmpeg";
 import { prisma } from "@/lib/prisma";
@@ -236,6 +238,30 @@ export async function generateHighlightAssets(projectId: string): Promise<Highli
   });
 
   return { subtitleCount: retimed.length, scriptTitle: generated.title };
+}
+
+export type NarrationAudioMode = "source" | "duck" | "replace";
+
+// 하이라이트 프로젝트의 내레이션 오디오 모드(원본 유지 / 덕킹+내레이션 / 음소거+내레이션)를 읽는다.
+// 미설정이면 "source"(원본 유지, 현행 기본).
+export async function getNarrationAudioMode(projectId: string): Promise<NarrationAudioMode> {
+  const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } });
+  const settings = (project.settings && typeof project.settings === "object" ? project.settings : {}) as Record<
+    string,
+    unknown
+  >;
+  const mode = settings.narrationAudioMode;
+  return mode === "duck" || mode === "replace" ? mode : "source";
+}
+
+// settings.narrationAudioMode를 병합 저장한다("source"면 키를 제거해 기본값으로 되돌린다).
+export async function setNarrationAudioMode(projectId: string, mode: NarrationAudioMode) {
+  const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } });
+  const next: Record<string, unknown> = { ...(project.settings as Record<string, unknown>) };
+  if (mode === "source") delete next.narrationAudioMode;
+  else next.narrationAudioMode = mode;
+  await prisma.project.update({ where: { id: projectId }, data: { settings: next as Prisma.InputJsonValue } });
+  return { mode };
 }
 
 export type HighlightThumbnailFrameResult = {

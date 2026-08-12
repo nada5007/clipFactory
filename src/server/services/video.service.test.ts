@@ -12,6 +12,7 @@ import {
   generateSilence,
   mixAudioTracks,
   mixBgmIntoVideo,
+  mixDuckedSourceWithNarration,
   muxVideoAudio,
   prepareBgmAudio,
   trimOrPadAudioToDuration,
@@ -27,6 +28,7 @@ vi.mock("@/lib/ffmpeg", () => ({
   prepareBgmAudio: vi.fn().mockResolvedValue(undefined),
   mixAudioTracks: vi.fn().mockResolvedValue(undefined),
   mixBgmIntoVideo: vi.fn().mockResolvedValue(undefined),
+  mixDuckedSourceWithNarration: vi.fn().mockResolvedValue(undefined),
   muxVideoAudio: vi.fn().mockResolvedValue(undefined),
   generateSilence: vi.fn().mockResolvedValue(undefined),
   trimOrPadAudioToDuration: vi.fn().mockResolvedValue(undefined),
@@ -367,6 +369,49 @@ describe("renderVideo", () => {
       expect(muxVideoAudio).not.toHaveBeenCalled();
     } finally {
       await prisma.bgmTrack.deleteMany({ where: { title: "덧믹싱 BGM" } });
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("덕킹 모드: TTS 내레이션이 있고 narrationAudioMode=duck면 원본 오디오를 덕킹해 내레이션과 믹싱한다", async () => {
+    // TTS(audio:true) + VIDEO 클립 + 이미지 없음 + narrationAudioMode=duck 조건.
+    const { channel, project } = await createProjectWithAssets({ audio: true, images: false });
+    try {
+      await renderVideo(project.id).catch(() => undefined); // 타임라인 생성(비주얼 없어 실패 무방)
+
+      const timeline = await prisma.timeline.findUniqueOrThrow({ where: { projectId: project.id } });
+      const videoTrack = await prisma.timelineTrack.findFirstOrThrow({
+        where: { timelineId: timeline.id, type: "VIDEO" },
+      });
+      const media = await prisma.uploadedMedia.create({
+        data: { projectId: project.id, kind: "video", filePath: "uploads/hl.mp4", durationMs: 2500 },
+      });
+      await prisma.timelineClip.create({
+        data: { trackId: videoTrack.id, startMs: 0, endMs: 2500, zIndex: 0, payload: { label: "hl", mediaId: media.id, mediaKind: "video" } },
+      });
+      await prisma.timeline.update({ where: { id: timeline.id }, data: { durationMs: 2500 } });
+      await prisma.project.update({ where: { id: project.id }, data: { settings: { narrationAudioMode: "duck" } } });
+
+      vi.mocked(buildVideoSegmentClip).mockClear();
+      vi.mocked(mixDuckedSourceWithNarration).mockClear();
+      vi.mocked(muxVideoAudio).mockClear();
+
+      await renderVideo(project.id);
+
+      // 덕킹: 비디오 세그먼트는 원본 오디오 유지(keepAudio=true)로 만들고, 최종은 mixDuckedSourceWithNarration.
+      expect(buildVideoSegmentClip).toHaveBeenCalledWith(
+        expect.stringContaining("hl.mp4"),
+        0,
+        2.5,
+        1080,
+        1920,
+        expect.any(String),
+        undefined,
+        true, // keepSourceAudio
+      );
+      expect(mixDuckedSourceWithNarration).toHaveBeenCalledTimes(1);
+      expect(muxVideoAudio).not.toHaveBeenCalled(); // replace 경로(mux)는 타지 않음
+    } finally {
       await cleanup(project.id, channel.id);
     }
   });

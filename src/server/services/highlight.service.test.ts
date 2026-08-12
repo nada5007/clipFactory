@@ -9,6 +9,8 @@ import {
   buildHighlightVideoTrack,
   generateHighlightAssets,
   generateHighlightThumbnailFrame,
+  getNarrationAudioMode,
+  setNarrationAudioMode,
 } from "@/server/services/highlight.service";
 
 vi.mock("@/lib/clients/anthropic", () => ({ selectEngagingSegments: vi.fn(), generateScriptPattern: vi.fn() }));
@@ -334,6 +336,33 @@ describe("generateHighlightThumbnailFrame", () => {
       await expect(generateHighlightThumbnailFrame(project.id)).rejects.toThrow("하이라이트 영상 클립이 없습니다");
     } finally {
       await prisma.timeline.deleteMany({ where: { projectId: project.id } });
+      await prisma.project.delete({ where: { id: project.id } });
+      await prisma.channel.delete({ where: { id: channel.id } });
+    }
+  });
+});
+
+describe("narrationAudioMode get/set", () => {
+  it("기본값은 source이고, duck/replace 저장·조회 후 source면 키를 제거한다", async () => {
+    const channel = await prisma.channel.create({ data: { name: "c", defaultSettings: {} } });
+    const project = await prisma.project.create({
+      data: { title: "오디오모드", channelId: channel.id, videoFormat: "SHORT", settings: { sourceVideo: { videoId: "v", url: "u", title: "t" } } },
+    });
+    try {
+      expect(await getNarrationAudioMode(project.id)).toBe("source");
+
+      await setNarrationAudioMode(project.id, "duck");
+      expect(await getNarrationAudioMode(project.id)).toBe("duck");
+
+      // 다른 settings(sourceVideo)는 병합 보존되어야 한다.
+      const afterDuck = await prisma.project.findUniqueOrThrow({ where: { id: project.id } });
+      expect((afterDuck.settings as { sourceVideo?: unknown }).sourceVideo).toBeTruthy();
+
+      await setNarrationAudioMode(project.id, "source");
+      expect(await getNarrationAudioMode(project.id)).toBe("source");
+      const afterSource = await prisma.project.findUniqueOrThrow({ where: { id: project.id } });
+      expect((afterSource.settings as { narrationAudioMode?: unknown }).narrationAudioMode).toBeUndefined();
+    } finally {
       await prisma.project.delete({ where: { id: project.id } });
       await prisma.channel.delete({ where: { id: channel.id } });
     }

@@ -287,6 +287,36 @@ export async function mixBgmIntoVideo(videoPath: string, bgmPath: string, output
   ]);
 }
 
+// 덕킹: 영상의 원본 오디오를 duckVolume(선형 게인, 예: 0.25)만큼 낮춘 뒤 그 위에 내레이션 오디오를
+// amix로 얹는다. 영상 스트림은 그대로 복사한다. duration=first로 영상 길이에 맞춰 자른다.
+export async function mixDuckedSourceWithNarration(
+  videoPath: string,
+  narrationPath: string,
+  duckVolume: number,
+  outputPath: string,
+): Promise<void> {
+  await execFileAsync(FFMPEG_BIN, [
+    "-y",
+    "-i",
+    videoPath,
+    "-i",
+    narrationPath,
+    "-filter_complex",
+    `[0:a]volume=${duckVolume}[src];[src][1:a]amix=inputs=2:duration=first:normalize=0[a]`,
+    "-map",
+    "0:v",
+    "-map",
+    "[a]",
+    "-c:v",
+    "copy",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "192k",
+    outputPath,
+  ]);
+}
+
 // 영상의 특정 시점(atSec) 프레임 한 장을 이미지 파일로 추출한다. 하이라이트 후킹 썸네일의
 // 배경 프레임으로 사용한다(-frames:v 1로 한 프레임만).
 export async function extractVideoFrame(videoPath: string, atSec: number, outputPath: string): Promise<void> {

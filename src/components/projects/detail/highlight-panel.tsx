@@ -110,6 +110,9 @@ export function HighlightPanel({ projectId }: { projectId: string }) {
   const [assetsError, setAssetsError] = useState<string | null>(null);
   const [assetsResult, setAssetsResult] = useState<{ subtitleCount: number; scriptTitle: string } | null>(null);
 
+  const [audioMode, setAudioMode] = useState<"source" | "duck" | "replace">("source");
+  const [audioModeSaving, setAudioModeSaving] = useState(false);
+
   const [thumbRunning, setThumbRunning] = useState(false);
   const [thumbSaving, setThumbSaving] = useState(false);
   const [thumbError, setThumbError] = useState<string | null>(null);
@@ -123,10 +126,16 @@ export function HighlightPanel({ projectId }: { projectId: string }) {
     fetch(`/api/projects/${projectId}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((p) => {
-        const s = (p?.settings ?? {}) as { sourceVideo?: SourceVideo; highlightSegments?: Segment[]; highlightMeta?: HighlightMeta };
+        const s = (p?.settings ?? {}) as {
+          sourceVideo?: SourceVideo;
+          highlightSegments?: Segment[];
+          highlightMeta?: HighlightMeta;
+          narrationAudioMode?: "source" | "duck" | "replace";
+        };
         setSourceVideo(s.sourceVideo ?? null);
         setSegments(s.highlightSegments ?? []);
         setMeta(s.highlightMeta ?? null);
+        setAudioMode(s.narrationAudioMode ?? "source");
       });
   }, [projectId]);
 
@@ -182,6 +191,22 @@ export function HighlightPanel({ projectId }: { projectId: string }) {
       })
       .catch((e) => setAssetsError(e instanceof Error ? e.message : "대본·자막 생성에 실패했습니다."))
       .finally(() => setAssetsRunning(false));
+  };
+
+  const changeAudioMode = (mode: "source" | "duck" | "replace") => {
+    const prev = audioMode;
+    setAudioMode(mode);
+    setAudioModeSaving(true);
+    fetch(`/api/projects/${projectId}/highlight-audio-mode`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error();
+      })
+      .catch(() => setAudioMode(prev)) // 실패 시 이전 선택으로 롤백
+      .finally(() => setAudioModeSaving(false));
   };
 
   // 4단계: 하이라이트 프레임 + 후킹 문구를 가져와 미리보기를 합성한다.
@@ -358,8 +383,51 @@ export function HighlightPanel({ projectId }: { projectId: string }) {
           </p>
         )}
         <p className="text-xs text-muted-foreground">
-          ※ 대본을 음성(TTS)으로 읽어주는 내레이션 자동 생성은 원본 오디오 유지 여부 등 설계 확정 후 추가 예정입니다.
+          ※ 아래 &lsquo;내레이션 오디오 모드&rsquo;에서 덕킹/음소거를 고르면, 이 대본을 TTS 탭에서 내레이션 음성으로 생성해
+          최종 영상에 얹을 수 있습니다.
         </p>
+      </div>
+
+      {/* 내레이션 오디오 모드 */}
+      <div className="flex flex-col gap-3 rounded-lg border bg-card p-4">
+        <div>
+          <h3 className="text-sm font-semibold">내레이션 오디오 모드</h3>
+          <p className="text-xs text-muted-foreground">최종 렌더에서 원본 소리와 AI 내레이션을 어떻게 섞을지 정합니다.</p>
+        </div>
+        <div className="flex flex-col gap-2">
+          {(
+            [
+              { key: "source", title: "원본 유지 (내레이션 없음)", desc: "각 하이라이트 클립의 원본 소리를 그대로 사용합니다. (기본)" },
+              { key: "duck", title: "덕킹 + 내레이션", desc: "원본 소리를 작게 낮춰 깔고 그 위에 AI 내레이션을 얹습니다." },
+              { key: "replace", title: "음소거 + 내레이션", desc: "원본 소리를 끄고 AI 내레이션(+BGM)만 사용합니다." },
+            ] as const
+          ).map((opt) => {
+            const active = audioMode === opt.key;
+            return (
+              <button
+                key={opt.key}
+                type="button"
+                onClick={() => changeAudioMode(opt.key)}
+                disabled={audioModeSaving}
+                className={`rounded-lg border p-3 text-left transition ${
+                  active ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-accent"
+                }`}
+              >
+                <p className="text-sm font-medium">
+                  {active ? "● " : "○ "}
+                  {opt.title}
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{opt.desc}</p>
+              </button>
+            );
+          })}
+        </div>
+        {audioMode !== "source" && (
+          <p className="rounded bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400">
+            ⚠️ 이 모드는 AI 내레이션 음성이 필요합니다. 위에서 만든 대본을 <b>TTS 탭</b>에서 음성으로 생성한 뒤 렌더하세요. 내레이션
+            음성이 아직 없으면 렌더는 자동으로 원본 소리(원본 유지)로 처리됩니다.
+          </p>
+        )}
       </div>
 
       {/* Phase 4: 후킹 썸네일 자동 생성 */}
