@@ -87,8 +87,8 @@ const OUTLINE_BTN = "border-white/20 bg-white/5 text-white hover:bg-white/10 hov
 const OUTLINE_BTN_DISABLED = "border-white/10 bg-white/5 text-white/30 hover:bg-white/5 hover:text-white/30";
 // "목표 길이 맞추기" 최대값 — 유효성 검사 패널에 이미 안내된 최종 렌더링 길이 제한(1800초)과 동일하게 맞춘다.
 const MAX_TARGET_LENGTH_MS = 1_800_000;
-// 타임라인 줌(스케일) 범위 — 기본 100%, 최소 30%, 최대 500%.
-const ZOOM_MIN = 30;
+// 타임라인 줌(스케일) 범위 — 기본 100%, 최소 1%(긴 영상 전체 조망), 최대 500%.
+const ZOOM_MIN = 1;
 const ZOOM_MAX = 500;
 
 // 실행취소/다시실행 스냅샷: 클립의 시간뿐 아니라 payload까지 통째로 담아, 삭제/생성 같은
@@ -378,7 +378,10 @@ function PlaybackToolbar({
           ⓘ Preview Mode — 애니메이션/전환효과는 렌더링 후 확인
         </span>
       )}
-      <label className="flex shrink-0 items-center gap-1">
+      <label
+        className="flex shrink-0 items-center gap-1"
+        title="스냅: 클립을 끌거나 자를 때 다른 클립의 경계·재생헤드에 자동으로 딱 맞춰 붙입니다(정렬 보조). 미세 조정하려면 끄세요."
+      >
         <Checkbox checked={snapEnabled} onCheckedChange={(v) => onSnapChange(Boolean(v))} />
         스냅
       </label>
@@ -392,13 +395,13 @@ function PlaybackToolbar({
   // 가운데 열이 남는 공간을 모두 차지해 좌우 콘텐츠 폭과 무관하게 항상 중앙에 오도록 한다.
   if (editTools) {
     return (
-      <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 overflow-x-auto border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
+      <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 border-b border-white/10 px-4 py-1.5 text-xs text-white/60">
         <div className="flex shrink-0 items-center gap-3">
           {timeDisplay}
           {playbackControls}
         </div>
-        <div className="flex flex-wrap items-center justify-center gap-1.5">{editTools}</div>
-        <div className="flex shrink-0 items-center gap-3">{rightControls}</div>
+        <div className="flex min-w-0 flex-wrap items-center justify-center gap-1.5">{editTools}</div>
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-3">{rightControls}</div>
       </div>
     );
   }
@@ -726,7 +729,9 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     const clip = findClipAtMs(ttsClips, atMs) ?? ttsClips.find((c) => c.startMs >= atMs) ?? null;
     const audio = ttsAudioRef.current;
     if (!clip || !audio || !clip.payload.sourceId) {
-      stopPlayback();
+      // TTS 프로젝트에서 더 재생할 TTS가 없으면 종료. 단, TTS가 아예 없는(하이라이트 등) 프로젝트에서는
+      // 여기서 멈추면 안 된다 — VIDEO 클립의 원본 오디오/프레임이 재생을 구동하기 때문(handleVideoTimeUpdate).
+      if (ttsClips.length > 0) stopPlayback();
       return;
     }
     if (currentTtsClipIdRef.current !== clip.id) {
@@ -808,6 +813,30 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
     const next = ttsClips[idx + 1];
     if (next) {
       playTtsFrom(next.startMs);
+    } else {
+      stopPlayback();
+      setPlayheadMs(timeline?.durationMs ?? 0);
+    }
+  }
+
+  // TTS 내레이션이 없는(하이라이트 등) 프로젝트에서는 미리보기 <video>가 재생 클럭 역할을 한다 —
+  // video의 timeupdate로 재생헤드를 전진시키고(적색 바 이동), 클립이 끝나면 다음 VIDEO 클립으로 넘어간다.
+  function handleVideoTimeUpdate() {
+    if (hasTtsClips) return; // TTS가 있으면 TTS(handleTtsTimeUpdate)가 재생헤드를 구동한다.
+    const video = previewVideoRef.current;
+    if (!video || !previewVideoClip) return;
+    const ms = previewVideoClip.startMs + video.currentTime * 1000 - (previewVideoClip.payload.sourceOffsetMs ?? 0);
+    setPlayheadMs(Math.max(0, Math.min(ms, timeline?.durationMs ?? ms)));
+  }
+
+  function handleVideoEnded() {
+    if (hasTtsClips) return;
+    const videoClips = getTrackClips("VIDEO");
+    const next = videoClips.find((c) => c.startMs >= (previewVideoClip?.endMs ?? 0));
+    if (next) {
+      // 다음 클립 시작으로 재생헤드를 옮기면 previewVideoClip이 바뀌며 <video>가 재마운트되고,
+      // isPlaying 상태를 보는 effect가 이어서 자동 재생한다.
+      setPlayheadMs(next.startMs);
     } else {
       stopPlayback();
       setPlayheadMs(timeline?.durationMs ?? 0);
@@ -1428,6 +1457,9 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                     // TTS 내레이션이 있으면 소리 겹침을 막기 위해 음소거, 없으면(하이라이트 등) 원본 오디오 재생.
                     muted={hasTtsClips}
                     playsInline
+                    // TTS가 없을 때 이 <video>가 재생 클럭이 된다(재생헤드 전진 + 다음 클립 이어재생).
+                    onTimeUpdate={handleVideoTimeUpdate}
+                    onEnded={handleVideoEnded}
                   />
                 ) : previewImageClip?.payload.sourceId ? (
                   <>
@@ -1668,10 +1700,14 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                 </div>
 
                 <div>
-                  <label className="mb-1 flex items-center gap-1.5">
+                  <label
+                    className="mb-1 flex items-center gap-1.5"
+                    title="스냅: 클립을 끌거나 자를 때 다른 클립의 경계·재생헤드에 자동으로 딱 맞춰 붙입니다(정렬 보조). 아래 간격(ms) 안에 들어오면 달라붙습니다. 미세 조정하려면 끄세요."
+                  >
                     <Checkbox checked={snapEnabled} onCheckedChange={(v) => setSnapEnabled(Boolean(v))} />
                     스냅 활성화
                   </label>
+                  <p className="mb-1 text-white/40">클립을 이동·분할할 때 인접 경계에 자동으로 정렬됩니다(달라붙는 간격 ↓).</p>
                   <div className="flex items-center gap-2">
                     <Slider
                       value={[snapIntervalMs]}
