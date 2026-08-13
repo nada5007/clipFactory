@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { Prisma } from "@prisma/client";
 
 import { generateScriptPattern, selectEngagingSegments, type EngagingSegment } from "@/lib/clients/anthropic";
-import { buildVideoSegmentClip, extractVideoFrame } from "@/lib/ffmpeg";
+import { buildVideoSegmentClip, extractAudioTrack, extractVideoFrame } from "@/lib/ffmpeg";
 import { prisma } from "@/lib/prisma";
 import { ensureProjectDir, resolveProjectFilePath } from "@/lib/storage";
 import { resolveThumbnailResolution } from "@/lib/thumbnail";
@@ -113,9 +113,14 @@ export async function buildHighlightVideoTrack(projectId: string): Promise<Build
     where: { timelineId: timeline.id, type: "VIDEO", autoSync: true },
   });
   if (!videoTrack) throw new Error("VIDEO 트랙을 찾을 수 없습니다.");
+  // "비디오 오디오"(AUDIO) 트랙 — 구간별 오디오를 분리 추출해 여기에 클립으로 배치한다(시각적 분리 트랙).
+  const audioTrack = await prisma.timelineTrack.findFirst({
+    where: { timelineId: timeline.id, type: "AUDIO", autoSync: true },
+  });
 
   // 재배치 전 기존 자동 생성분 정리(재실행 시 중복 방지).
   await prisma.timelineClip.deleteMany({ where: { trackId: videoTrack.id } });
+  if (audioTrack) await prisma.timelineClip.deleteMany({ where: { trackId: audioTrack.id } });
 
   const { width, height } = resolveVideoResolution(project.videoFormat);
 
@@ -159,6 +164,27 @@ export async function buildHighlightVideoTrack(projectId: string): Promise<Build
         payload: { label: `하이라이트 ${i + 1}`, mediaId: media.id, mediaKind: "video" },
       },
     });
+
+    // 3) 이 구간의 오디오를 분리 추출해 "비디오 오디오"(AUDIO) 트랙에 같은 위치로 배치한다. 오디오가 없는
+    // 영상이면(extractAudioTrack=false) 건너뛴다. 현재는 표시/구조용이며, 실제 소리는 VIDEO 클립이 담당한다.
+    if (audioTrack) {
+      const audioRel = `uploads/highlight_audio_${Date.now()}_${i}.mp3`;
+      const ok = await extractAudioTrack(rawPath, resolveProjectFilePath(projectId, audioRel));
+      if (ok) {
+        const audioMedia = await prisma.uploadedMedia.create({
+          data: { projectId, kind: "audio", filePath: audioRel, durationMs },
+        });
+        await prisma.timelineClip.create({
+          data: {
+            trackId: audioTrack.id,
+            startMs: cursorMs,
+            endMs: cursorMs + durationMs,
+            payload: { label: `비디오 오디오 ${i + 1}`, mediaId: audioMedia.id, mediaKind: "audio" },
+          },
+        });
+      }
+    }
+
     cursorMs += durationMs;
     clipCount += 1;
   }

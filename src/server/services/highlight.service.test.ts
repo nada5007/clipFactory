@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { generateScriptPattern, selectEngagingSegments } from "@/lib/clients/anthropic";
-import { buildVideoSegmentClip } from "@/lib/ffmpeg";
+import { buildVideoSegmentClip, extractAudioTrack } from "@/lib/ffmpeg";
 import { prisma } from "@/lib/prisma";
 import { downloadVideoSection, fetchAutoSubtitles } from "@/lib/ytdlp";
 import {
@@ -17,6 +17,7 @@ vi.mock("@/lib/clients/anthropic", () => ({ selectEngagingSegments: vi.fn(), gen
 vi.mock("@/lib/ytdlp", () => ({ fetchAutoSubtitles: vi.fn(), downloadVideoSection: vi.fn() }));
 vi.mock("@/lib/ffmpeg", () => ({
   buildVideoSegmentClip: vi.fn(),
+  extractAudioTrack: vi.fn(),
   // 실제 ffmpeg 대신 출력 경로에 더미 프레임 파일을 써서 후속 readFile이 성공하게 한다.
   extractVideoFrame: vi.fn(async (_video: string, _at: number, out: string) => {
     const { writeFile } = await import("node:fs/promises");
@@ -128,6 +129,7 @@ describe("buildHighlightVideoTrack", () => {
     vi.clearAllMocks();
     vi.mocked(downloadVideoSection).mockResolvedValue(undefined);
     vi.mocked(buildVideoSegmentClip).mockResolvedValue(undefined);
+    vi.mocked(extractAudioTrack).mockResolvedValue(true);
   });
 
   async function createProjectWithHighlights(segments: { startMs: number; endMs: number; reason: string }[]) {
@@ -172,6 +174,15 @@ describe("buildHighlightVideoTrack", () => {
       expect(videoTrack.clips[0]).toMatchObject({ startMs: 0, endMs: 12000 });
       expect(videoTrack.clips[1]).toMatchObject({ startMs: 12000, endMs: 27000 });
       expect(timeline.durationMs).toBe(27000);
+
+      // 구간별 오디오를 분리 추출해 "비디오 오디오"(AUDIO) 트랙에도 같은 위치로 클립을 배치한다.
+      expect(extractAudioTrack).toHaveBeenCalledTimes(2);
+      const audioTrack = await prisma.timelineTrack.findFirstOrThrow({
+        where: { timelineId: timeline.id, type: "AUDIO" },
+        include: { clips: { orderBy: { startMs: "asc" } } },
+      });
+      expect(audioTrack.clips).toHaveLength(2);
+      expect(audioTrack.clips[0]).toMatchObject({ startMs: 0, endMs: 12000 });
 
       const updated = await prisma.project.findUniqueOrThrow({ where: { id: project.id } });
       expect(updated.status).toBe("EDITING");
