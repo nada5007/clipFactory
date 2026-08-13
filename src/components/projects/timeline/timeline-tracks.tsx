@@ -320,7 +320,7 @@ export function TimelineTracks({
 
   return (
     <div
-      className="flex flex-col border-t border-white/10 bg-[#0d1017] text-xs text-white/80"
+      className="flex min-w-0 flex-col border-t border-white/10 bg-[#0d1017] text-xs text-white/80"
       style={{ height: heightPx ?? 224 }}
     >
       <div className="flex items-center gap-3 border-b border-white/10 px-3 py-1.5 text-white/50">

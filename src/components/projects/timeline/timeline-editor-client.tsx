@@ -1354,7 +1354,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="flex h-full flex-col rounded-lg bg-[#0b0d12] text-white">
+    <div className="flex h-full flex-col overflow-hidden rounded-lg bg-[#0b0d12] text-white">
       {/* 상단 툴바 1행 */}
       <div className="flex flex-wrap items-center gap-3 border-b border-white/10 px-4 py-2">
         <Link href={`/projects/${projectId}`} className="text-white/60 hover:text-white">
