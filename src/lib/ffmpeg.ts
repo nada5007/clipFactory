@@ -191,12 +191,18 @@ export async function muxVideoAudio(
   audioPath: string,
   outputPath: string,
 ): Promise<void> {
+  // 명시적으로 영상은 입력0의 비디오 스트림, 소리는 입력1의 오디오 스트림을 쓴다 — 영상에 자체 오디오가
+  // 있어도(예: 원본 오디오 유지 비디오) 그 소리는 무시하고 넘긴 오디오만 입히기 위함.
   await execFileAsync(FFMPEG_BIN, [
     "-y",
     "-i",
     videoPath,
     "-i",
     audioPath,
+    "-map",
+    "0:v:0",
+    "-map",
+    "1:a:0",
     "-c:v",
     "copy",
     "-c:a",
@@ -206,6 +212,11 @@ export async function muxVideoAudio(
     "-shortest",
     outputPath,
   ]);
+}
+
+// 오디오 파일에 선형 볼륨을 적용해 새 파일로 저장한다("비디오 오디오" 트랙 클립의 볼륨 반영용).
+export async function applyAudioVolume(inputPath: string, volumeLinear: number, outputPath: string): Promise<void> {
+  await execFileAsync(FFMPEG_BIN, ["-y", "-i", inputPath, "-af", `volume=${volumeLinear}`, "-c:a", "libmp3lame", outputPath]);
 }
 
 // TTS 클립이 트림(트림-시작/트림-끝)된 경우 원본 오디오에서 [offsetSec, offsetSec+durationSec] 구간만 뽑아낸다.

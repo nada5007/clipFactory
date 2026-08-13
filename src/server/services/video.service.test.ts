@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyAudioVolume,
   buildImageSegmentClip,
   buildVideoSegmentClip,
   burnSubtitles,
@@ -32,6 +33,7 @@ vi.mock("@/lib/ffmpeg", () => ({
   muxVideoAudio: vi.fn().mockResolvedValue(undefined),
   generateSilence: vi.fn().mockResolvedValue(undefined),
   trimOrPadAudioToDuration: vi.fn().mockResolvedValue(undefined),
+  applyAudioVolume: vi.fn().mockResolvedValue(undefined),
   burnSubtitles: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -369,6 +371,49 @@ describe("renderVideo", () => {
       expect(muxVideoAudio).not.toHaveBeenCalled();
     } finally {
       await prisma.bgmTrack.deleteMany({ where: { title: "덧믹싱 BGM" } });
+      await cleanup(project.id, channel.id);
+    }
+  });
+
+  it("비디오 오디오 트랙(분리 믹싱): AUDIO 클립이 있으면 그 오디오로 mux하고 볼륨을 반영한다", async () => {
+    const { channel, project } = await createProjectWithAssets({ audio: false, images: false });
+    try {
+      await renderVideo(project.id).catch(() => undefined); // 타임라인 생성 목적
+
+      const timeline = await prisma.timeline.findUniqueOrThrow({ where: { projectId: project.id } });
+      const videoTrack = await prisma.timelineTrack.findFirstOrThrow({ where: { timelineId: timeline.id, type: "VIDEO" } });
+      const audioTrack = await prisma.timelineTrack.findFirstOrThrow({ where: { timelineId: timeline.id, type: "AUDIO" } });
+      const videoMedia = await prisma.uploadedMedia.create({
+        data: { projectId: project.id, kind: "video", filePath: "uploads/hl.mp4", durationMs: 2000 },
+      });
+      const audioMedia = await prisma.uploadedMedia.create({
+        data: { projectId: project.id, kind: "audio", filePath: "uploads/hl_audio.mp3", durationMs: 2000 },
+      });
+      await prisma.timelineClip.create({
+        data: { trackId: videoTrack.id, startMs: 0, endMs: 2000, zIndex: 0, payload: { label: "hl", mediaId: videoMedia.id, mediaKind: "video" } },
+      });
+      await prisma.timelineClip.create({
+        data: {
+          trackId: audioTrack.id,
+          startMs: 0,
+          endMs: 2000,
+          zIndex: 0,
+          payload: { label: "비디오 오디오 1", mediaId: audioMedia.id, mediaKind: "audio", audioOptions: { volume: 0.5 } },
+        },
+      });
+      await prisma.timeline.update({ where: { id: timeline.id }, data: { durationMs: 2000 } });
+
+      vi.mocked(muxVideoAudio).mockClear();
+      vi.mocked(mixBgmIntoVideo).mockClear();
+      vi.mocked(applyAudioVolume).mockClear();
+
+      await renderVideo(project.id);
+
+      // 분리 믹싱: AUDIO 트랙 오디오를 muxVideoAudio로 입히고(영상 임베디드 소리 대신), 볼륨 0.5를 적용.
+      expect(muxVideoAudio).toHaveBeenCalledTimes(1);
+      expect(applyAudioVolume).toHaveBeenCalledWith(expect.stringContaining("hl_audio.mp3"), 0.5, expect.any(String));
+      expect(mixBgmIntoVideo).not.toHaveBeenCalled();
+    } finally {
       await cleanup(project.id, channel.id);
     }
   });

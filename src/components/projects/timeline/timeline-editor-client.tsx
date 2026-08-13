@@ -677,6 +677,13 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
   // TTS 내레이션이 없는 프로젝트(예: 채널 분석 하이라이트 — 원본 오디오 유지)에서는 비디오 클립의
   // 원본 소리를 그대로 재생한다. TTS가 있으면 소리가 겹치므로 비디오는 음소거한다.
   const hasTtsClips = (timeline?.tracks.find((t) => t.type === "TTS")?.clips.length ?? 0) > 0;
+  // "비디오 오디오"(AUDIO) 트랙이 있으면(하이라이트 분리 트랙) 소리를 이 트랙이 담당한다. 비디오의
+  // 임베디드 오디오가 곧 이 트랙의 추출 소스와 같으므로, 현재 위치의 AUDIO 클립 볼륨/음소거를 <video>에
+  // 그대로 반영하면 렌더의 분리 믹싱과 동일하게 들린다(트랙이 비었으면 legacy: 비디오 원본 그대로).
+  const hasAudioTrackClips = (timeline?.tracks.find((t) => t.type === "AUDIO")?.clips.length ?? 0) > 0;
+  const previewAudioOpts = findClipAtMsByPriority(timeline?.tracks ?? [], ["AUDIO"], playheadMs)?.clip?.payload.audioOptions;
+  const videoMuted = hasTtsClips || (hasAudioTrackClips && (!previewAudioOpts || previewAudioOpts.muted === true));
+  const videoAudioVolume = hasAudioTrackClips ? (previewAudioOpts?.volume ?? 1) * previewVolume : previewVolume;
   const previewSubtitleClip = findClipAtMsByPriority(timeline?.tracks ?? [], ["SUBTITLE"], playheadMs)?.clip ?? null;
   // 스타일 탭에서 설정한 폰트/크기/색상/배경/위치/테두리가 실제 렌더링(ASS 번인)과 동일하게 반영되도록,
   // 하드코딩된 스타일 대신 resolveSubtitleStyle 결과를 그대로 쓴다.
@@ -759,8 +766,9 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     if (ttsAudioRef.current) ttsAudioRef.current.volume = previewVolume;
-    if (previewVideoRef.current) previewVideoRef.current.volume = previewVolume;
-  }, [previewVolume]);
+    // 비디오는 "비디오 오디오" 트랙 클립의 볼륨(× 미리보기 볼륨)을 반영한다.
+    if (previewVideoRef.current) previewVideoRef.current.volume = Math.max(0, Math.min(1, videoAudioVolume));
+  }, [previewVolume, videoAudioVolume]);
 
   function playTtsFrom(atMs: number) {
     const ttsClips = getTrackClips("TTS");
@@ -1492,8 +1500,8 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
                     src={`/api/projects/${projectId}/media/${previewVideoClip.payload.mediaId}/file`}
                     className="size-full object-cover"
                     style={{ filter: previewVideoFilter || undefined }}
-                    // TTS 내레이션이 있으면 소리 겹침을 막기 위해 음소거, 없으면(하이라이트 등) 원본 오디오 재생.
-                    muted={hasTtsClips}
+                    // TTS가 있거나 "비디오 오디오" 트랙 클립이 음소거/공백이면 음소거, 아니면 원본 소리 재생.
+                    muted={videoMuted}
                     playsInline
                     // TTS가 없을 때 이 <video>가 재생 클럭이 된다(재생헤드 전진 + 다음 클립 이어재생).
                     onTimeUpdate={handleVideoTimeUpdate}

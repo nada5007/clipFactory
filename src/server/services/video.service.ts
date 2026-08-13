@@ -1,5 +1,6 @@
 import { generateAss } from "@/lib/ass";
 import {
+  applyAudioVolume,
   buildImageSegmentClip,
   buildVideoSegmentClip,
   burnSubtitles,
@@ -38,6 +39,39 @@ export function getVideo(projectId: string) {
 
 function clipPayload(clip: { payload: unknown }): PersistedClipPayload {
   return (clip.payload as PersistedClipPayload | null) ?? { label: "" };
+}
+
+type AudioRenderInput = { startMs: number; endMs: number; filePath: string; sourceOffsetMs: number; naturalDurationMs: number };
+
+// 오디오 클립 입력 목록을 타임라인 계획(무음 갭/트림/직접)에 따라 이어붙여 하나의 오디오 파일로 만든다.
+// TTS 내레이션과 "비디오 오디오" 트랙 믹싱이 공용으로 쓴다(입력이 비면 전체가 무음).
+async function buildAudioFromInputs(
+  projectId: string,
+  inputs: AudioRenderInput[],
+  totalDurationMs: number,
+  outRelPath: string,
+  tmpPrefix: string,
+): Promise<string> {
+  const plan = computeAudioRenderPlan(inputs, totalDurationMs);
+  const parts: string[] = [];
+  for (let i = 0; i < plan.length; i++) {
+    const part = plan[i];
+    if (part.durationSec <= 0) continue;
+    if (part.type === "silence") {
+      const p = resolveProjectFilePath(projectId, `tmp/${tmpPrefix}_silence_${i}.mp3`);
+      await generateSilence(part.durationSec, p);
+      parts.push(p);
+    } else if (part.needsTrim) {
+      const p = resolveProjectFilePath(projectId, `tmp/${tmpPrefix}_trim_${i}.mp3`);
+      await trimOrPadAudioToDuration(part.filePath, part.offsetSec, part.durationSec, p);
+      parts.push(p);
+    } else {
+      parts.push(part.filePath);
+    }
+  }
+  const outPath = resolveProjectFilePath(projectId, outRelPath);
+  await concatAudioFiles(parts, resolveProjectFilePath(projectId, `tmp/${tmpPrefix}_concat.txt`), outPath);
+  return outPath;
 }
 
 // PROJECT_SPEC.md §1.3 "렌더링 파이프라인 확장": VIDEO/IMAGE 트랙이 여러 개여도 미리보기와 동일한
@@ -131,26 +165,7 @@ export async function renderVideo(projectId: string, onProgress?: JobProgressRep
         };
       });
 
-      const audioPlan = computeAudioRenderPlan(audioClipInputs, totalDurationMs);
-      const audioPartPaths: string[] = [];
-      for (let i = 0; i < audioPlan.length; i++) {
-        const part = audioPlan[i];
-        if (part.durationSec <= 0) continue;
-        if (part.type === "silence") {
-          const silencePath = resolveProjectFilePath(projectId, `tmp/silence_${i}.mp3`);
-          await generateSilence(part.durationSec, silencePath);
-          audioPartPaths.push(silencePath);
-        } else if (part.needsTrim) {
-          const trimmedPath = resolveProjectFilePath(projectId, `tmp/tts_trim_${i}.mp3`);
-          await trimOrPadAudioToDuration(part.filePath, part.offsetSec, part.durationSec, trimmedPath);
-          audioPartPaths.push(trimmedPath);
-        } else {
-          audioPartPaths.push(part.filePath);
-        }
-      }
-
-      audioFullPath = resolveProjectFilePath(projectId, "audio_full.mp3");
-      await concatAudioFiles(audioPartPaths, resolveProjectFilePath(projectId, "tmp/audio_concat.txt"), audioFullPath);
+      audioFullPath = await buildAudioFromInputs(projectId, audioClipInputs, totalDurationMs, "audio_full.mp3", "tts");
     }
     await onProgress?.(20, "영상/이미지 자료 준비 중");
 
@@ -233,9 +248,52 @@ export async function renderVideo(projectId: string, onProgress?: JobProgressRep
     // 자막을 입힐 대상 영상.
     let videoForSubtitles = videoOnlyPath;
     if (audioStrategy === "source") {
-      // 원본 오디오만: 이어붙인 영상이 이미 원본 소리를 갖고 있다. BGM이 설정돼 있으면 원본
-      // 오디오를 덮지 않고 그 위에 덧믹싱한다(내레이션 없음, 원본 소리 + BGM).
-      if (bgmPreparedPath) {
+      // "비디오 오디오"(AUDIO) 트랙이 있으면(하이라이트 분리 트랙) 그 클립들이 소리를 담당한다 — 클립별
+      // 볼륨/음소거를 반영해 오디오를 만들고, 영상은 스트림만 써서 mux한다(영상 임베디드 소리는 무시).
+      const audioTrackClips = timeline.tracks.find((t) => t.type === "AUDIO")?.clips ?? [];
+      if (audioTrackClips.length > 0) {
+        await onProgress?.(60, "비디오 오디오 트랙 믹싱 중");
+        // 음소거 클립은 제외(→ 갭=무음). 볼륨≠1이면 미리 볼륨을 적용한 임시 파일을 만든다.
+        const usable = (audioTrackClips as unknown as PersistedTimelineClip[]).filter((c) => {
+          const p = clipPayload(c);
+          return p.mediaId && !p.audioOptions?.muted;
+        });
+        const mediaIds = Array.from(new Set(usable.map((c) => clipPayload(c).mediaId).filter((v): v is string => Boolean(v))));
+        const medias = await prisma.uploadedMedia.findMany({ where: { id: { in: mediaIds } } });
+        const mediaById = new Map(medias.map((m) => [m.id, m]));
+        const inputs: AudioRenderInput[] = [];
+        for (const c of usable) {
+          const p = clipPayload(c);
+          const media = p.mediaId ? mediaById.get(p.mediaId) : undefined;
+          if (!media) continue;
+          let filePath = resolveProjectFilePath(projectId, media.filePath);
+          const vol = p.audioOptions?.volume ?? 1;
+          if (vol !== 1) {
+            const volPath = resolveProjectFilePath(projectId, `tmp/vtaudio_vol_${c.id}.mp3`);
+            await applyAudioVolume(filePath, Math.max(0, vol), volPath);
+            filePath = volPath;
+          }
+          inputs.push({
+            startMs: c.startMs,
+            endMs: c.endMs,
+            filePath,
+            sourceOffsetMs: p.sourceOffsetMs ?? 0,
+            naturalDurationMs: media.durationMs ?? c.endMs - c.startMs,
+          });
+        }
+        inputs.sort((a, b) => a.startMs - b.startMs);
+        let trackAudio = await buildAudioFromInputs(projectId, inputs, totalDurationMs, "audio_videotrack.mp3", "vtaudio");
+        if (bgmPreparedPath) {
+          const mixedPath = resolveProjectFilePath(projectId, "audio_vt_mixed.mp3");
+          await mixAudioTracks(trackAudio, bgmPreparedPath, mixedPath);
+          trackAudio = mixedPath;
+        }
+        await onProgress?.(70, "영상과 비디오 오디오 합성 중");
+        const outPath = resolveProjectFilePath(projectId, "video_vtaudio.mp4");
+        await muxVideoAudio(videoOnlyPath, trackAudio, outPath);
+        videoForSubtitles = outPath;
+      } else if (bgmPreparedPath) {
+        // AUDIO 트랙이 아예 없으면(레거시 원본 오디오 모드) 영상 임베디드 소리 위에 BGM만 덧믹싱한다.
         await onProgress?.(70, "원본 오디오 위 BGM 덧믹싱 중");
         const videoWithBgmPath = resolveProjectFilePath(projectId, "video_bgm.mp4");
         await mixBgmIntoVideo(videoOnlyPath, bgmPreparedPath, videoWithBgmPath);
