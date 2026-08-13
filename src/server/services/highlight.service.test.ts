@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateScriptPattern, selectEngagingSegments } from "@/lib/clients/anthropic";
 import { buildVideoSegmentClip } from "@/lib/ffmpeg";
 import { prisma } from "@/lib/prisma";
-import { downloadVideo, fetchAutoSubtitles } from "@/lib/ytdlp";
+import { downloadVideoSection, fetchAutoSubtitles } from "@/lib/ytdlp";
 import {
   analyzeProjectHighlights,
   buildHighlightVideoTrack,
@@ -14,7 +14,7 @@ import {
 } from "@/server/services/highlight.service";
 
 vi.mock("@/lib/clients/anthropic", () => ({ selectEngagingSegments: vi.fn(), generateScriptPattern: vi.fn() }));
-vi.mock("@/lib/ytdlp", () => ({ fetchAutoSubtitles: vi.fn(), downloadVideo: vi.fn() }));
+vi.mock("@/lib/ytdlp", () => ({ fetchAutoSubtitles: vi.fn(), downloadVideoSection: vi.fn() }));
 vi.mock("@/lib/ffmpeg", () => ({
   buildVideoSegmentClip: vi.fn(),
   // 실제 ffmpeg 대신 출력 경로에 더미 프레임 파일을 써서 후속 readFile이 성공하게 한다.
@@ -126,7 +126,7 @@ describe("analyzeProjectHighlights", () => {
 describe("buildHighlightVideoTrack", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(downloadVideo).mockResolvedValue(undefined);
+    vi.mocked(downloadVideoSection).mockResolvedValue(undefined);
     vi.mocked(buildVideoSegmentClip).mockResolvedValue(undefined);
   });
 
@@ -154,10 +154,12 @@ describe("buildHighlightVideoTrack", () => {
     try {
       const result = await buildHighlightVideoTrack(project.id);
 
-      expect(downloadVideo).toHaveBeenCalledWith("https://www.youtube.com/watch?v=vid123", expect.stringContaining("source/original.mp4"));
+      // 구간별로 해당 구간만 내려받는다: 첫 구간 offset 8s·길이 12s.
+      expect(downloadVideoSection).toHaveBeenCalledTimes(2);
+      expect(downloadVideoSection).toHaveBeenNthCalledWith(1, "https://www.youtube.com/watch?v=vid123", 8, 12, expect.stringContaining("section_0.mp4"));
       expect(buildVideoSegmentClip).toHaveBeenCalledTimes(2);
-      // 첫 구간: offset 8s, 길이 12s, SHORT 해상도(1080x1920), 원본 오디오 유지(keepAudio=true)
-      expect(buildVideoSegmentClip).toHaveBeenCalledWith(expect.any(String), 8, 12, 1080, 1920, expect.any(String), undefined, true);
+      // 내려받은 구간(section)을 offset 0부터, 길이 12s, SHORT 해상도(1080x1920), 원본 오디오 유지(keepAudio=true)
+      expect(buildVideoSegmentClip).toHaveBeenCalledWith(expect.stringContaining("section_0.mp4"), 0, 12, 1080, 1920, expect.any(String), undefined, true);
       expect(result.clipCount).toBe(2);
       expect(result.totalDurationMs).toBe(27000);
 
@@ -199,7 +201,7 @@ describe("buildHighlightVideoTrack", () => {
     const { channel, project } = await createProjectWithHighlights([]);
     try {
       await expect(buildHighlightVideoTrack(project.id)).rejects.toThrow("선정된 하이라이트 구간이 없습니다");
-      expect(downloadVideo).not.toHaveBeenCalled();
+      expect(downloadVideoSection).not.toHaveBeenCalled();
     } finally {
       await cleanup(project.id, channel.id);
     }

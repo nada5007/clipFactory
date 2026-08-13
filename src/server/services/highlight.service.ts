@@ -9,7 +9,7 @@ import { ensureProjectDir, resolveProjectFilePath } from "@/lib/storage";
 import { resolveThumbnailResolution } from "@/lib/thumbnail";
 import { formatCuesForPrompt, parseTranscript, retimeCuesToTimeline, type TranscriptCue } from "@/lib/transcript";
 import { resolveVideoResolution } from "@/lib/video";
-import { downloadVideo, fetchAutoSubtitles } from "@/lib/ytdlp";
+import { downloadVideoSection, fetchAutoSubtitles } from "@/lib/ytdlp";
 import { getOrSyncTimeline } from "@/server/services/timeline.service";
 
 // 영상 형태별 기본 목표 길이(초). 사용자가 targetDurationSec로 덮어쓸 수 있다.
@@ -119,13 +119,11 @@ export async function buildHighlightVideoTrack(projectId: string): Promise<Build
 
   const { width, height } = resolveVideoResolution(project.videoFormat);
 
-  // 1) 원본 영상 다운로드.
   await ensureProjectDir(projectId, "source");
   await ensureProjectDir(projectId, "uploads");
-  const sourcePath = resolveProjectFilePath(projectId, "source/original.mp4");
-  await downloadVideo(sourceVideo.url, sourcePath);
 
-  // 2) 구간별로 잘라 파일·UploadedMedia·클립을 만들고 트랙에 순차 배치.
+  // 구간별로 (원본을 통째로 받지 않고) 해당 구간만 내려받아 리사이즈·배치한다. 긴 생중계(수 시간)를
+  // 통째로 받으면 타임아웃/수 GB가 되므로 downloadVideoSection으로 필요한 구간만 받는다.
   let cursorMs = 0;
   let clipCount = 0;
   const sorted = [...segments].sort((a, b) => a.startMs - b.startMs);
@@ -134,10 +132,14 @@ export async function buildHighlightVideoTrack(projectId: string): Promise<Build
     const durationMs = seg.endMs - seg.startMs;
     if (durationMs <= 0) continue;
 
+    // 1) 이 구간만 원본에서 내려받는다(raw). 2) 목표 해상도로 리사이즈하며 원본 오디오를 유지해 최종 클립 생성.
+    const rawPath = resolveProjectFilePath(projectId, `source/section_${i}.mp4`);
+    await downloadVideoSection(sourceVideo.url, seg.startMs / 1000, durationMs / 1000, rawPath);
+
     const relPath = `uploads/highlight_${Date.now()}_${i}.mp4`;
     await buildVideoSegmentClip(
-      sourcePath,
-      seg.startMs / 1000,
+      rawPath,
+      0, // 이미 구간만 받았으므로 offset 0부터.
       durationMs / 1000,
       width,
       height,
