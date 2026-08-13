@@ -359,7 +359,14 @@ function PlaybackToolbar({
       )}
       {showSpeedAndZoom && (
         <div className="flex items-center gap-1.5">
-          <ZoomOut className="size-3.5 text-white/40" />
+          <button
+            type="button"
+            onClick={() => onZoomChange(Math.max(ZOOM_MIN, zoom - 1))}
+            className="text-white/40 hover:text-white"
+            title="줌 1% 축소"
+          >
+            <ZoomOut className="size-3.5" />
+          </button>
           <Slider
             className="w-20"
             value={[zoom]}
@@ -368,7 +375,14 @@ function PlaybackToolbar({
             max={ZOOM_MAX}
             step={1}
           />
-          <ZoomIn className="size-3.5 text-white/40" />
+          <button
+            type="button"
+            onClick={() => onZoomChange(Math.min(ZOOM_MAX, zoom + 1))}
+            className="text-white/40 hover:text-white"
+            title="줌 1% 확대"
+          >
+            <ZoomIn className="size-3.5" />
+          </button>
           <span className="w-9 shrink-0">{zoom}%</span>
         </div>
       )}
@@ -424,6 +438,30 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
 
   const [activeTab, setActiveTab] = useState<LeftTab>("script");
   const [zoom, setZoom] = useState(100);
+  // 미리보기(영상)↔타임라인 트랙 영역의 높이 분할 — 드래그 핸들로 조정한다.
+  const [tracksHeight, setTracksHeight] = useState(224);
+  const tracksResizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      const r = tracksResizeRef.current;
+      if (!r) return;
+      // 핸들을 위로 끌면(작은 Y) 트랙 영역이 커지고 영상 영역이 작아진다.
+      setTracksHeight(Math.max(120, Math.min(760, r.startHeight + (r.startY - e.clientY))));
+    }
+    function onUp() {
+      tracksResizeRef.current = null;
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, []);
+  function startTracksResize(e: React.MouseEvent) {
+    tracksResizeRef.current = { startY: e.clientY, startHeight: tracksHeight };
+    e.preventDefault();
+  }
   // 편집 프리뷰 전용 재생 속도(§5.5) — 합성 미리보기 재생 기능은 다음 라운드에서 이 값을 소비할 예정.
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   // "미리보기 재생 볼륨" — 지금까지 이 개념이 없어서(BGM은 프로젝트 설정 dB만, TTS는 볼륨 설정 자체가
@@ -1795,6 +1833,14 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
       {/* 재생 툴바(좌)와 편집 도구 아이콘(중앙)을 한 줄에 배치(참조 사이트 레이아웃). 호흡구간(ms)/목표
           길이처럼 수치 입력이 필요한 두 기능은 아이콘 클릭 시 인라인으로 확장되어 나타난다. */}
       <TooltipProvider delayDuration={200}>
+        {/* 영상↔타임라인 높이 조정 드래그 핸들(가로선). 위로 끌면 트랙 영역이 커지고 영상 영역이 작아진다. */}
+        <div
+          onMouseDown={startTracksResize}
+          className="group flex h-2 shrink-0 cursor-row-resize items-center justify-center border-t border-white/10 bg-white/5 hover:bg-white/15"
+          title="드래그해서 영상/타임라인 영역 높이 조정"
+        >
+          <div className="h-0.5 w-10 rounded-full bg-white/20 group-hover:bg-white/40" />
+        </div>
         <PlaybackToolbar
           isPlaying={isPlaying}
           onTogglePlay={togglePlay}
@@ -1911,6 +1957,7 @@ export function TimelineEditorClient({ projectId }: { projectId: string }) {
         <TimelineTracks
           timeline={timeline}
           zoom={zoom}
+          heightPx={tracksHeight}
           selectedClipId={selectedClipId}
           multiSelectedIds={multiSelectedIds}
           playheadMs={playheadMs}

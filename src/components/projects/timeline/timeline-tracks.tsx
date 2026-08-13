@@ -108,6 +108,7 @@ function TrackIconButton({
 export function TimelineTracks({
   timeline,
   zoom,
+  heightPx,
   selectedClipId,
   multiSelectedIds,
   playheadMs,
@@ -125,6 +126,7 @@ export function TimelineTracks({
 }: {
   timeline: PersistedTimeline;
   zoom: number;
+  heightPx?: number;
   selectedClipId: string | null;
   multiSelectedIds: Set<string>;
   playheadMs: number;
@@ -144,6 +146,36 @@ export function TimelineTracks({
   const pxPerSec = (BASE_PX_PER_SEC * zoom) / 100;
   const durationSec = timeline.durationMs / 1000;
   const totalWidth = Math.max(durationSec * pxPerSec, 400);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const TRACK_LABEL_WIDTH = 160; // 좌측 트랙 라벨(sticky w-40) 폭 — 가로 가시영역 계산에 뺀다.
+
+  // 재생헤드가 가로 가시영역을 벗어나면 자동으로 스크롤해 항상 보이게 한다(줌 100%↑에서 재생/탐색 시).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const playheadX = (playheadMs / 1000) * pxPerSec;
+    const viewLeft = el.scrollLeft;
+    const viewWidth = el.clientWidth - TRACK_LABEL_WIDTH;
+    if (playheadX < viewLeft || playheadX > viewLeft + viewWidth) {
+      el.scrollLeft = Math.max(0, playheadX - viewWidth / 2);
+    }
+  }, [playheadMs, pxPerSec]);
+
+  // Ctrl+휠: 트랙 영역 상하 스크롤(Shift+휠 좌우 스크롤은 브라우저 기본 동작). 기본 리스너는 passive라
+  // preventDefault가 안 먹어 브라우저 확대와 충돌하므로 non-passive 네이티브 리스너로 등록한다.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    function onWheel(e: WheelEvent) {
+      const node = scrollRef.current;
+      if (!e.ctrlKey || !node) return;
+      e.preventDefault();
+      node.scrollTop += e.deltaY;
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   const rulerStepSec = computeRulerStepSec(pxPerSec);
   const rulerMinorStepSec = rulerStepSec / RULER_MINOR_SUBDIVISIONS;
@@ -287,7 +319,10 @@ export function TimelineTracks({
   }
 
   return (
-    <div className="flex h-56 flex-col border-t border-white/10 bg-[#0d1017] text-xs text-white/80">
+    <div
+      className="flex flex-col border-t border-white/10 bg-[#0d1017] text-xs text-white/80"
+      style={{ height: heightPx ?? 224 }}
+    >
       <div className="flex items-center gap-3 border-b border-white/10 px-3 py-1.5 text-white/50">
         <span>
           {formatTimecode(playheadMs / 1000)} / {formatTimecode(durationSec)}
@@ -295,7 +330,7 @@ export function TimelineTracks({
         <span className="ml-auto">Zoom: {zoom}%</span>
       </div>
 
-      <div className="flex flex-1 overflow-auto">
+      <div ref={scrollRef} className="flex flex-1 overflow-auto">
         <div className="sticky left-0 z-10 flex w-40 shrink-0 flex-col bg-[#0d1017]">
           <div className="h-6 shrink-0 border-b border-white/10" />
           {timeline.tracks.map((track, idx) => (
@@ -454,9 +489,10 @@ export function TimelineTracks({
             );
           })}
 
+          {/* 재생헤드(적색 바) — 클립(zIndex 부여됨)보다 위에 그려 모든 트랙 위로 세로 전체를 덮게 한다. */}
           <div
             className="pointer-events-none absolute top-0 bottom-0 w-px bg-red-500"
-            style={{ left: (playheadMs / 1000) * pxPerSec }}
+            style={{ left: (playheadMs / 1000) * pxPerSec, zIndex: 100000 }}
           />
         </div>
       </div>
