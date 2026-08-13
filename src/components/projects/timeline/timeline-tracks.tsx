@@ -489,10 +489,16 @@ export function TimelineTracks({
             );
           })}
 
-          {/* 재생헤드(적색 바) — 클립(zIndex 부여됨)보다 위에 그려 모든 트랙 위로 세로 전체를 덮게 한다. */}
+          {/* 재생헤드(적색 바) — bottom-0은 부모의 (스크롤이 아닌) 가시 높이에 묶여 트랙이 세로 스크롤되면
+              중간에서 끊긴다. 눈금자(h-6=24px) + 트랙 레인(h-14=56px)×개수로 전체 높이를 명시하고,
+              클립(zIndex 부여됨)보다 위(zIndex 100000)에 그려 모든 트랙 세로 전체를 덮게 한다. */}
           <div
-            className="pointer-events-none absolute top-0 bottom-0 w-px bg-red-500"
-            style={{ left: (playheadMs / 1000) * pxPerSec, zIndex: 100000 }}
+            className="pointer-events-none absolute top-0 w-px bg-red-500"
+            style={{
+              left: (playheadMs / 1000) * pxPerSec,
+              height: 24 + timeline.tracks.length * 56,
+              zIndex: 100000,
+            }}
           />
         </div>
       </div>
