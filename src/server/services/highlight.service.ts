@@ -10,7 +10,7 @@ import { resolveThumbnailResolution } from "@/lib/thumbnail";
 import { formatCuesForPrompt, parseTranscript, retimeCuesToTimeline, type TranscriptCue } from "@/lib/transcript";
 import { resolveVideoResolution } from "@/lib/video";
 import { downloadVideoSection, fetchAutoSubtitles } from "@/lib/ytdlp";
-import { getOrSyncTimeline } from "@/server/services/timeline.service";
+import { ensureAutoTrack, getOrSyncTimeline } from "@/server/services/timeline.service";
 
 // 영상 형태별 기본 목표 길이(초). 사용자가 targetDurationSec로 덮어쓸 수 있다.
 const DEFAULT_TARGET_SEC: Record<"SHORT" | "LONG", number> = { SHORT: 45, LONG: 180 };
@@ -109,14 +109,10 @@ export async function buildHighlightVideoTrack(projectId: string): Promise<Build
   // 타임라인 + VIDEO(autoSync) 트랙 확보.
   const timeline = await getOrSyncTimeline(projectId);
   if (!timeline) throw new Error("타임라인을 불러올 수 없습니다.");
-  const videoTrack = await prisma.timelineTrack.findFirst({
-    where: { timelineId: timeline.id, type: "VIDEO", autoSync: true },
-  });
-  if (!videoTrack) throw new Error("VIDEO 트랙을 찾을 수 없습니다.");
+  // 사용자가 자동 트랙을 삭제했을 수 있으므로 ensureAutoTrack으로 없으면 재생성해 확보한다.
+  const videoTrack = await ensureAutoTrack(timeline.id, "VIDEO");
   // "비디오 오디오"(AUDIO) 트랙 — 구간별 오디오를 분리 추출해 여기에 클립으로 배치한다(시각적 분리 트랙).
-  const audioTrack = await prisma.timelineTrack.findFirst({
-    where: { timelineId: timeline.id, type: "AUDIO", autoSync: true },
-  });
+  const audioTrack = await ensureAutoTrack(timeline.id, "AUDIO");
 
   // 재배치 전 기존 자동 생성분 정리(재실행 시 중복 방지).
   await prisma.timelineClip.deleteMany({ where: { trackId: videoTrack.id } });
@@ -220,10 +216,7 @@ export async function generateHighlightAssets(projectId: string): Promise<Highli
   // ① 영상 내 오디오 자막: 자막 큐를 새 타임라인으로 재타이밍해 SUBTITLE(autoSync) 트랙에 생성.
   const timeline = await getOrSyncTimeline(projectId);
   if (!timeline) throw new Error("타임라인을 불러올 수 없습니다.");
-  const subtitleTrack = await prisma.timelineTrack.findFirst({
-    where: { timelineId: timeline.id, type: "SUBTITLE", autoSync: true },
-  });
-  if (!subtitleTrack) throw new Error("SUBTITLE 트랙을 찾을 수 없습니다.");
+  const subtitleTrack = await ensureAutoTrack(timeline.id, "SUBTITLE");
 
   const retimed = retimeCuesToTimeline(cues, segments);
   await prisma.timelineClip.deleteMany({ where: { trackId: subtitleTrack.id } });

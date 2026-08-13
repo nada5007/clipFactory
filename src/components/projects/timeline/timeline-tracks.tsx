@@ -162,20 +162,6 @@ export function TimelineTracks({
     }
   }, [playheadMs, pxPerSec]);
 
-  // Ctrl+휠: 트랙 영역 상하 스크롤(Shift+휠 좌우 스크롤은 브라우저 기본 동작). 기본 리스너는 passive라
-  // preventDefault가 안 먹어 브라우저 확대와 충돌하므로 non-passive 네이티브 리스너로 등록한다.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    function onWheel(e: WheelEvent) {
-      const node = scrollRef.current;
-      if (!e.ctrlKey || !node) return;
-      e.preventDefault();
-      node.scrollTop += e.deltaY;
-    }
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, []);
 
   const rulerStepSec = computeRulerStepSec(pxPerSec);
   const rulerMinorStepSec = rulerStepSec / RULER_MINOR_SUBDIVISIONS;
@@ -393,9 +379,17 @@ export function TimelineTracks({
                     </TooltipTrigger>
                     <TooltipContent>클립 추가(직접 업로드)</TooltipContent>
                   </Tooltip>
-                  {!track.autoSync && (
-                    <TrackIconButton icon={X} label="트랙 삭제" onClick={() => onRemoveTrack(track.id)} destructive />
-                  )}
+                  <TrackIconButton
+                    icon={X}
+                    label="트랙 삭제"
+                    onClick={() => {
+                      // 클립이 있는 트랙은 실수 삭제를 막기 위해 확인을 받는다(빈 트랙은 바로 삭제).
+                      const n = track.clips.length;
+                      if (n > 0 && !window.confirm(`'${track.name}' 트랙과 클립 ${n}개가 삭제됩니다. 계속할까요?`)) return;
+                      onRemoveTrack(track.id);
+                    }}
+                    destructive
+                  />
                 </div>
               </div>
             </div>

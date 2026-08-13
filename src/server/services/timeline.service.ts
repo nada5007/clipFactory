@@ -636,11 +636,20 @@ export async function addTrack(projectId: string, type: TimelineTrackType, name?
 }
 
 export async function removeTrack(trackId: string) {
-  const track = await prisma.timelineTrack.findUniqueOrThrow({ where: { id: trackId } });
-  if (track.autoSync) {
-    throw new Error("자동 생성된 트랙은 삭제할 수 없습니다.");
-  }
+  // 사용자 결정(2026-08-13): 자동 트랙도 삭제 허용(클라이언트에서 클립이 있으면 확인 팝업). 파이프라인이
+  // 필요로 하는 자동 트랙(VIDEO/AUDIO/SUBTITLE 등)은 해당 단계 재실행 시 ensureAutoTrack으로 재생성된다.
   await prisma.timelineTrack.delete({ where: { id: trackId } });
+}
+
+// 특정 타입의 autoSync 트랙을 반환하되, (사용자가 삭제해) 없으면 TRACK_DEFS 기준으로 다시 만들어 준다.
+// 파이프라인 단계(하이라이트 트랙/자막 생성 등)가 삭제된 자동 트랙 때문에 실패하지 않도록 하는 안전장치.
+export async function ensureAutoTrack(timelineId: string, type: TimelineTrackType) {
+  const existing = await prisma.timelineTrack.findFirst({ where: { timelineId, type, autoSync: true } });
+  if (existing) return existing;
+  const def = TRACK_DEFS.find((d) => d.type === type);
+  return prisma.timelineTrack.create({
+    data: { timelineId, type, name: def?.name ?? type, order: def?.order ?? 99, autoSync: true },
+  });
 }
 
 // 트랙 헤더의 보이기/숨기기(visible)·잠금(locked) 토글.
